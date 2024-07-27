@@ -1,0 +1,4 @@
+/target
+*.mp4
+/.vscode
+/.cargo
