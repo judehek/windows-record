@@ -11,6 +11,7 @@ use windows::{
     Win32::Graphics::Dxgi::Common::*,
     Win32::Media::Audio::*,
     Win32::System::Com::StructuredStorage::*,
+    Win32::System::Threading::*
 };
 use std::cell::RefCell;
 use std::mem::{size_of, ManuallyDrop };
@@ -45,7 +46,7 @@ unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width
     let mut attributes: Option<IMFAttributes> = None;
     MFCreateAttributes(&mut attributes, 0)?;
     if let Some(attrs) = &attributes {
-        //attrs.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
+        attrs.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
     }
     
     
@@ -292,6 +293,7 @@ unsafe fn collect_frames(
     device: Arc<ID3D11Device>,
     context_mutex: Arc<Mutex<ID3D11DeviceContext>>
 ) -> Result<()> {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
     // Get DXGI device
     let dxgi_device: IDXGIDevice = device.cast()?;
 
@@ -448,6 +450,8 @@ unsafe fn process_samples(
     height: u32,
     device: Arc<ID3D11Device>,
 ) -> Result<()> {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+
     let converter: IMFTransform = CoCreateInstance(&CLSID_VideoProcessorMFT, None, CLSCTX_INPROC_SERVER)?;
 
     // Set input media type (B8G8R8A8_UNORM)
@@ -546,6 +550,7 @@ unsafe fn collect_audio(
     proc_id: u32,
     started: Arc<Barrier>
 ) -> Result<()> {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
     // Create device enumerator
     let enumerator: IMMDeviceEnumerator = CoCreateInstance(
         &MMDeviceEnumerator,
