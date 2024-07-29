@@ -45,7 +45,7 @@ unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width
     let mut attributes: Option<IMFAttributes> = None;
     MFCreateAttributes(&mut attributes, 0)?;
     if let Some(attrs) = &attributes {
-        attrs.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
+        //attrs.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
     }
     
     
@@ -90,8 +90,7 @@ unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width
     MFCreateAttributes(&mut config_attrs, 0)?;
     if let Some(attrs) = &config_attrs {
         attrs.SetUINT32(&CODECAPI_AVEncCommonRateControlMode, eAVEncCommonRateControlMode_GlobalVBR.0.try_into().unwrap())?;
-        attrs.SetUINT32(&CODECAPI_AVEncCommonMeanBitRate, 5000000)?; // 1 Mbps
-        //attrs.SetUINT32(&CODECAPI_AVEncCommonRealTime, 1)?;
+        attrs.SetUINT32(&CODECAPI_AVEncCommonMeanBitRate, 8000000)?; // 1 Mbps
     }
 
     sink_writer.SetInputMediaType(stream_val, &video_media_type, config_attrs.as_ref())?;
@@ -425,6 +424,10 @@ unsafe fn collect_frames(
             }
             Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => {
                 // Timeout occurred, continue to next iteration
+                let current_time = Instant::now();
+                let overrun = current_time.duration_since(next_frame_time);
+                accumulated_delay += overrun;
+
                 continue;
             }
             Err(error) => return Err(error),
@@ -902,7 +905,7 @@ impl Recorder {
 }
 
 fn main() -> windows::core::Result<()> {
-    let rec = Recorder::new(60, 1, 1920, 1080);
+    let rec = Recorder::new(30, 1, 1920, 1080);
 
     rec.set_process_name("League of Legends (TM)");
     // Potentially add codecs here
@@ -911,7 +914,7 @@ fn main() -> windows::core::Result<()> {
     
     let res = rec.start_recording("output.mp4");
     println!("{:?}", res);
-    std::thread::sleep(Duration::from_secs(60));
+    std::thread::sleep(Duration::from_secs(5*60));
     let res2 = rec.stop_recording();
     println!("{:?}", res2);
     Ok(())
