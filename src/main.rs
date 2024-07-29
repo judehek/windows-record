@@ -47,6 +47,7 @@ unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width
     MFCreateAttributes(&mut attributes, 0)?;
     if let Some(attrs) = &attributes {
         attrs.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
+        attrs.SetUINT32(&MF_SINK_WRITER_DISABLE_THROTTLING, 1)?;
     }
     
     
@@ -65,6 +66,7 @@ unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width
     video_output_type.SetUINT64(&MF_MT_FRAME_SIZE, ((s_width as u64) << 32) | (s_height as u64))?;
     video_output_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1 << 32) | 1u64)?;
     video_output_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0.try_into().unwrap())?;
+    video_output_type.SetUINT32(&MF_MT_VIDEO_PROFILE, eAVEncH264VProfile_High.0.try_into().unwrap())?;
 
     // Video in Type
     let video_media_type: IMFMediaType = MFCreateMediaType()?;
@@ -76,7 +78,6 @@ unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width
     video_media_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
     video_media_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1u64 << 32) | 1u64)?;
 
-    // Calculate and set the correct stride (should be multiple of 16 for optimal performance)
     let stride = s_width;
     video_media_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, stride as u32)?;
 
@@ -218,6 +219,7 @@ unsafe fn convert_bgra_to_nv12(
     let duration = in_sample.GetSampleDuration()?;
     let time = in_sample.GetSampleTime()?;
     //println!("Frame Count: {}", time / duration);
+    println!("DURATION: {}, TIME: {}", duration, time);
 
     // Create NV12 texture
     let mut nv12_desc = D3D11_TEXTURE2D_DESC {
@@ -267,7 +269,6 @@ unsafe fn convert_bgra_to_nv12(
 
     let x = converter.ProcessOutput(0,output_slice, &mut test);
     //println!("flags: {}", test);
-
 
     if let Err(e) = x {
         println!("{:?}", e);
@@ -480,8 +481,11 @@ unsafe fn process_samples(
     while recording.load(Ordering::Relaxed) {
         // Video
         if let Ok(samp) = rec_video.try_recv() {
+            let start = Instant::now();
             let cvt = convert_bgra_to_nv12(&device, &converter, &*samp.0, width, height)?;
+            println!("Convert:{:?}", start.elapsed());
             writer.0.WriteSample(0, &cvt)?; 
+            println!("Write:{:?}", start.elapsed());
             drop(samp);
             drop(cvt);
         }
@@ -613,11 +617,6 @@ unsafe fn collect_audio(
     // Get the capture client
     let capture_client: IAudioCaptureClient = audio_client.GetService()?;
 
-    // Calculate the duration of each packet based on the format
-    /*let packet_duration = Duration::from_nanos(
-        (10_000_000.0 * (wave_format.nBlockAlign / 2) as f64 / wave_format.nSamplesPerSec as f64) as u64
-    );*/
-
     let packet_duration = Duration::from_nanos((1000000000.0 / wave_format.nSamplesPerSec as f64) as u64);
     let packet_duration_hns = packet_duration.as_nanos() as i64 / 100;
     
@@ -627,6 +626,8 @@ unsafe fn collect_audio(
     started.wait();
     while recording.load(Ordering::Relaxed) {
         let next_packet_size = capture_client.GetNextPacketSize()?;
+        // Check here if we are in sync, if not then we should resync ourselves.
+        // Not sure the protocol.. just delay samples or sumn
 
         if next_packet_size > 0 {
             let mut buffer: *mut u8 = std::ptr::null_mut();
@@ -918,7 +919,7 @@ fn main() -> windows::core::Result<()> {
     
     let res = rec.start_recording("output3.mp4");
     println!("{:?}", res);
-    std::thread::sleep(Duration::from_secs(30));
+    std::thread::sleep(Duration::from_secs(12*60));
     let res2 = rec.stop_recording();
     println!("{:?}", res2);
     Ok(())
