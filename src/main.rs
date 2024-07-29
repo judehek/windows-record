@@ -91,7 +91,10 @@ unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width
     MFCreateAttributes(&mut config_attrs, 0)?;
     if let Some(attrs) = &config_attrs {
         attrs.SetUINT32(&CODECAPI_AVEncCommonRateControlMode, eAVEncCommonRateControlMode_GlobalVBR.0.try_into().unwrap())?;
-        attrs.SetUINT32(&CODECAPI_AVEncCommonMeanBitRate, 8000000)?; // 1 Mbps
+        attrs.SetUINT32(&CODECAPI_AVEncCommonMeanBitRate, 5000000)?; // 1 Mbps
+        attrs.SetUINT32(&CODECAPI_AVEncMPVDefaultBPictureCount, 0)?;
+        attrs.SetUINT32(&CODECAPI_AVEncCommonQuality, 70)?;
+        attrs.SetUINT32(&CODECAPI_AVEncCommonLowLatency, 1)?;
     }
 
     sink_writer.SetInputMediaType(stream_val, &video_media_type, config_attrs.as_ref())?;
@@ -342,7 +345,7 @@ unsafe fn collect_frames(
     println!("GOT TO WAIT");
     started.wait();
     while recording.load(Ordering::Relaxed) {
-        // let mut frame_start = Instant::now();
+        //let mut frame_start = Instant::now();
 
         let mut resource: Option<IDXGIResource> = None;
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
@@ -426,10 +429,6 @@ unsafe fn collect_frames(
             }
             Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => {
                 // Timeout occurred, continue to next iteration
-                let current_time = Instant::now();
-                let overrun = current_time.duration_since(next_frame_time);
-                accumulated_delay += overrun;
-
                 continue;
             }
             Err(error) => return Err(error),
@@ -912,14 +911,14 @@ impl Recorder {
 fn main() -> windows::core::Result<()> {
     let rec = Recorder::new(30, 1, 1920, 1080);
 
-    rec.set_process_name("League of Legends (TM)");
+    rec.set_process_name("League of Legends");
     // Potentially add codecs here
     //println!("Starting in 10");
     std::thread::sleep(Duration::from_secs(3));
     
-    let res = rec.start_recording("output.mp4");
+    let res = rec.start_recording("output3.mp4");
     println!("{:?}", res);
-    std::thread::sleep(Duration::from_secs(5*60));
+    std::thread::sleep(Duration::from_secs(30));
     let res2 = rec.stop_recording();
     println!("{:?}", res2);
     Ok(())
