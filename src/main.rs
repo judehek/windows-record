@@ -1,3 +1,4 @@
+use log::{debug, error, info, trace, warn, LevelFilter};
 use thiserror::Error;
 use windows::{
     core::*,
@@ -15,6 +16,7 @@ use windows::{
 };
 use std::cell::RefCell;
 use std::mem::{size_of, ManuallyDrop };
+use std::panic;
 use std::sync::atomic::{ AtomicBool, Ordering };
 use std::time::Instant;
 use std::{ptr, time::Duration};
@@ -22,6 +24,11 @@ use std::sync::atomic::AtomicIsize;
 use std::sync::{Arc, Mutex, Condvar, Barrier};
 use std::thread::JoinHandle;
 use std::sync::mpsc::{Sender, Receiver, channel};
+use std::fs::File;
+use std::io::{self, Write};
+use chrono::Local;
+use env_logger::{Builder, Target};
+use lazy_static::lazy_static;
 
 struct SendableSample(Arc<IMFSample>);
 unsafe impl Send for SendableSample {}
@@ -41,8 +48,120 @@ struct RecorderInner {
     collect_audio_handle: RefCell<Option<JoinHandle<Result<()>>>>,
 }
 
+struct SyncFile(Mutex<File>);
+
+impl Write for SyncFile {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.lock().unwrap().write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.lock().unwrap().flush()
+    }
+}
+
+struct MultiWriter {
+    file: SyncFile,
+}
+
+impl MultiWriter {
+    fn new(file: File) -> Self {
+        MultiWriter {
+            file: SyncFile(Mutex::new(file)),
+        }
+    }
+}
+
+impl Write for MultiWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let file_result = self.file.write(buf);
+        let stdout_result = io::stdout().lock().write(buf);
+        
+        match (file_result, stdout_result) {
+            (Ok(file_len), Ok(stdout_len)) => Ok(file_len.max(stdout_len)),
+            (Ok(len), Err(_)) | (Err(_), Ok(len)) => Ok(len),
+            (Err(e), Err(_)) => Err(e),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()?;
+        io::stdout().flush()
+    }
+}
+
+lazy_static! {
+    static ref LOGGER: Mutex<Option<Mutex<MultiWriter>>> = Mutex::new(None);
+}
+
+fn setup_logger() -> io::Result<()> {
+    // Create a timestamp for the log file name
+    let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    let log_file_name = format!("application_log_{}.txt", timestamp);
+
+    // Open the log file
+    let file = File::create(log_file_name)?;
+    let multi_writer = MultiWriter::new(file);
+
+    // Store the logger globally
+    *LOGGER.lock().unwrap() = Some(Mutex::new(multi_writer));
+
+    // Create a custom logger
+    let mut builder = Builder::new();
+    builder.filter_level(LevelFilter::Debug);  // Set to Debug level
+    
+    // Use our custom MultiWriter
+    builder.target(Target::Pipe(Box::new(CustomWrite)));
+
+    builder.format(|buf, record| {
+        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        writeln!(buf, "{} [{}] - {}", timestamp, record.level(), record.args())
+    });
+
+    // Initialize the logger
+    builder.init();
+
+    // Set up the panic hook
+    std::panic::set_hook(Box::new(|panic_info| {
+        error!("PANIC: {}", panic_info);
+        if let Some(location) = panic_info.location() {
+            error!("PANIC occurred in file '{}' at line {}", location.file(), location.line());
+        }
+        
+        // Ensure all logs are flushed
+        if let Some(ref writer) = *LOGGER.lock().unwrap() {
+            let _ = writer.lock().unwrap().flush();
+        }
+    }));
+
+    info!("Logger initialized with output to file and stdout");
+    Ok(())
+}
+
+struct CustomWrite;
+
+impl io::Write for CustomWrite {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if let Some(ref writer) = *LOGGER.lock().unwrap() {
+            let mut writer = writer.lock().unwrap();
+            writer.write(buf)
+        } else {
+            Ok(0)
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if let Some(ref writer) = *LOGGER.lock().unwrap() {
+            let mut writer = writer.lock().unwrap();
+            writer.flush()
+        } else {
+            Ok(())
+        }
+    }
+}
 
 unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width: u32, s_height: u32) -> Result<IMFSinkWriter> {
+    debug!("Creating sink writer for file: {}", filename);
     let mut attributes: Option<IMFAttributes> = None;
     MFCreateAttributes(&mut attributes, 0)?;
     if let Some(attrs) = &attributes {
@@ -125,6 +244,7 @@ unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width
     let stream_val = sink_writer.AddStream(&audio_output_type)?;
     sink_writer.SetInputMediaType(stream_val, &audio_media_type, None)?;
 
+    info!("Sink writer created successfully");
     Ok(sink_writer)
 } 
 
@@ -297,6 +417,7 @@ unsafe fn collect_frames(
     device: Arc<ID3D11Device>,
     context_mutex: Arc<Mutex<ID3D11DeviceContext>>
 ) -> Result<()> {
+    info!("Starting frame collection");
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
     // Get DXGI device
     let dxgi_device: IDXGIDevice = device.cast()?;
@@ -426,6 +547,7 @@ unsafe fn collect_frames(
                     // context_mutex.lock().unwrap().Unmap(&staging_texture, 0);
                     // Release frame
                     duplication.ReleaseFrame()?;
+                    trace!("Collected frame {}", frame_count);
                 }
             }
             Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => {
@@ -437,7 +559,7 @@ unsafe fn collect_frames(
     }
 
 
-    println!("Num duped: {}", num_duped);
+    info!("Frame collection finished. Number of duped: {}", num_duped);
     Ok(())
 }
 
@@ -450,6 +572,7 @@ unsafe fn process_samples(
     height: u32,
     device: Arc<ID3D11Device>,
 ) -> Result<()> {
+    info!("Starting sample processing");
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 
     let converter: IMFTransform = CoCreateInstance(&CLSID_VideoProcessorMFT, None, CLSCTX_INPROC_SERVER)?;
@@ -483,9 +606,9 @@ unsafe fn process_samples(
         if let Ok(samp) = rec_video.try_recv() {
             let start = Instant::now();
             let cvt = convert_bgra_to_nv12(&device, &converter, &*samp.0, width, height)?;
-            println!("Convert:{:?}", start.elapsed());
+            debug!("Video frame converted in {:?}", start.elapsed());
             writer.0.WriteSample(0, &cvt)?; 
-            println!("Write:{:?}", start.elapsed());
+            debug!("Video frame written in {:?}", start.elapsed());
             drop(samp);
             drop(cvt);
         }
@@ -494,6 +617,7 @@ unsafe fn process_samples(
             drop(audio_samp);
         }
     }
+    info!("Sample processing finished");
     writer.0.Finalize()?;
     Ok(())
 }
@@ -692,6 +816,7 @@ impl RecorderInner {
         screen_height: u32,
         process_name: &str,
     ) -> Result<Self> {
+        info!("Initializing recorder for process: {}", process_name);
         // Init Libraries
         let recording = Arc::new(AtomicBool::new(true));
         let mut collect_video_handle: Option<JoinHandle<Result<()>>> = None;
@@ -727,17 +852,40 @@ impl RecorderInner {
             let mut context: Option<ID3D11DeviceContext> = None;
             let feature_levels = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_9_3, D3D_FEATURE_LEVEL_9_2, D3D_FEATURE_LEVEL_9_1];
             
-            D3D11CreateDevice(
+            info!("Creating D3D11 device");
+            let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_DEBUG;
+            let result = D3D11CreateDevice(
                 None,
                 D3D_DRIVER_TYPE_HARDWARE,
                 None,
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_DEBUG,
+                flags,
                 Some(&feature_levels),
                 D3D11_SDK_VERSION,
                 Some(&mut device),
                 None,
                 Some(&mut context),
-            )?;
+            );
+            if let Err(e) = result {
+                if e.code() == DXGI_ERROR_SDK_COMPONENT_MISSING {
+                    warn!("Debug layer not available, falling back to non-debug creation");
+                    flags &= !D3D11_CREATE_DEVICE_DEBUG;
+                    D3D11CreateDevice(
+                        None,
+                        D3D_DRIVER_TYPE_HARDWARE,
+                        None,
+                        flags,
+                        Some(&feature_levels),
+                        D3D11_SDK_VERSION,
+                        Some(&mut device),
+                        None,
+                        Some(&mut context),
+                    )?;
+                } else {
+                    error!("Failed to create D3D11 device: {:?}", e);
+                    return Err(e);
+                }
+            }
+
             let device = device.unwrap();
             let multithread: ID3D11Multithread = device.cast()?;
             multithread.SetMultithreadProtected(true);
@@ -762,7 +910,8 @@ impl RecorderInner {
                 process_samples(sendable_sink, receiver, receiver_audio,  rec_clone, screen_width, screen_height, device_ptr)
             }));
 
-        }   
+        }
+        info!("Recorder initialized successfully");   
         Ok(Self {
             recording,
             collect_video_handle: RefCell::new(collect_video_handle),
@@ -772,7 +921,7 @@ impl RecorderInner {
     }
 
     fn stop(&self) -> std::result::Result<(), RecorderError> {
-        println!("Stopping");
+        info!("Stopping recorder");
         if !self.recording.load(Ordering::Relaxed) {
             return Err(RecorderError::RecorderAlreadyStopped)
         }
@@ -782,21 +931,18 @@ impl RecorderInner {
         let audio_handle = self.collect_audio_handle.borrow_mut().take();
         let process_handle = self.process_handle.borrow_mut().take();
 
-        println!("VIDEO: ");
         if let Some(handle) = frame_handle {
             if let Ok(res) = handle.join()
                 .map_err(|_| RecorderError::Generic("Frame Handle Join Failed".to_string())) {
                     println!("{:?}", res)
                 };
         }
-        println!("AUDIO: ");
         if let Some(handle) = audio_handle {
             if let Ok(res) = handle.join()
                 .map_err(|_| RecorderError::Generic("Audio Handle Join Failed".to_string())) {
                     println!("{:?}", res)
                 };
         }
-        println!("PROCESS: ");
         if let Some(handle) = process_handle {
             if let Ok(res) = handle.join()
                 .map_err(|_| RecorderError::Generic("Process Handle Join Failed".to_string())) {
@@ -885,6 +1031,7 @@ impl Recorder {
     }
 
     pub fn start_recording(&self, filename: &str) -> std::result::Result<(), RecorderError> {
+        info!("Starting recording to file: {}", filename);
         let rec_configs = self.rec_configs.borrow();
         let rec_proc_name = self.rec_proc_name.borrow();
         let mut ref_rec_mut = self.rec_inner.borrow_mut();
@@ -898,6 +1045,7 @@ impl Recorder {
     }
 
     pub fn stop_recording(&self) -> std::result::Result<(), RecorderError> {
+        info!("Stopping recording");
         let ref_inner = self.rec_inner.borrow();
 
         let Some(ref rec_inner) = *ref_inner
@@ -909,18 +1057,35 @@ impl Recorder {
     }
 }
 
-fn main() -> windows::core::Result<()> {
+fn main() -> io::Result<()> {
+    setup_logger()?;
+    info!("Application started");
+
     let rec = Recorder::new(30, 1, 1920, 1080);
 
     rec.set_process_name("League of Legends");
-    // Potentially add codecs here
-    //println!("Starting in 10");
+    info!("Set process name to League of Legends");
+
     std::thread::sleep(Duration::from_secs(3));
+    info!("Starting recording");
     
-    let res = rec.start_recording("output3.mp4");
+    let res = rec.start_recording("output.mp4");
+    match &res {
+        Ok(_) => info!("Recording started successfully"),
+        Err(e) => error!("Failed to start recording: {:?}", e),
+    }
     println!("{:?}", res);
-    std::thread::sleep(Duration::from_secs(12*60));
+
+    std::thread::sleep(Duration::from_secs(15));
+    info!("Stopping recording");
+
     let res2 = rec.stop_recording();
+    match &res2 {
+        Ok(_) => info!("Recording stopped successfully"),
+        Err(e) => error!("Failed to stop recording: {:?}", e),
+    }
     println!("{:?}", res2);
+
+    info!("Application finished");
     Ok(())
 }
