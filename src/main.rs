@@ -16,7 +16,7 @@ use windows::{
 };
 use std::cell::RefCell;
 use std::mem::{size_of, ManuallyDrop };
-use std::panic;
+use std::{env, panic};
 use std::sync::atomic::{ AtomicBool, Ordering };
 use std::time::Instant;
 use std::{ptr, time::Duration};
@@ -571,6 +571,7 @@ unsafe fn process_samples(
     width: u32,
     height: u32,
     device: Arc<ID3D11Device>,
+    capture_audio: bool,
 ) -> Result<()> {
     info!("Starting sample processing");
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
@@ -612,9 +613,11 @@ unsafe fn process_samples(
             drop(samp);
             drop(cvt);
         }
-        if let Ok(audio_samp) = rec_audio.try_recv() {
-            writer.0.WriteSample(1, &*audio_samp.0)?;
-            drop(audio_samp);
+        if capture_audio {
+            if let Ok(audio_samp) = rec_audio.try_recv() {
+                writer.0.WriteSample(1, &*audio_samp.0)?;
+                drop(audio_samp);
+            }
         }
     }
     info!("Sample processing finished");
@@ -815,6 +818,7 @@ impl RecorderInner {
         screen_width: u32,
         screen_height: u32,
         process_name: &str,
+        capture_audio: bool,
     ) -> Result<Self> {
         info!("Initializing recorder for process: {}", process_name);
         // Init Libraries
@@ -836,7 +840,7 @@ impl RecorderInner {
             // Get the process ID
             let mut process_id: u32 = 0;
             GetWindowThreadProcessId(hwnd, Some(&mut process_id));
-            println!("Process ID: {}", process_id);
+            info!("Process ID: {}", process_id);
 
             media_sink.BeginWriting()?;
             let sendable_sink = SendableWriter(Arc::new(media_sink));
@@ -900,14 +904,18 @@ impl RecorderInner {
                 collect_frames(sender, rec_clone, hwnd, fps_num, fps_den, screen_width, screen_height, barrier, dev_clone, context_mutex)
             }));
 
-            let rec_clone = recording.clone();
-            collect_audio_handle = Some(std::thread::spawn(move || {
-                collect_audio(sender_audio, rec_clone, process_id, barrier_clone)
-            }));
+            if capture_audio {
+                let rec_clone = recording.clone();
+                collect_audio_handle = Some(std::thread::spawn(move || {
+                    collect_audio(sender_audio, rec_clone, process_id, barrier_clone)
+                }));
+            } else {
+                info!("Audio capture disabled");
+            }
 
             let rec_clone = recording.clone();
             process_handle = Some(std::thread::spawn(move || {
-                process_samples(sendable_sink, receiver, receiver_audio,  rec_clone, screen_width, screen_height, device_ptr)
+                process_samples(sendable_sink, receiver, receiver_audio, rec_clone, screen_width, screen_height, device_ptr, capture_audio)
             }));
 
         }
@@ -984,6 +992,7 @@ struct RecorderConfigs {
     fps_den: u32,
     screen_width: u32,
     screen_height: u32,
+    capture_audio: bool,
 }
 
 
@@ -1002,6 +1011,7 @@ impl Recorder {
                 fps_num,
                 screen_width,
                 screen_height,
+                capture_audio: true,
             }),
             rec_proc_name: RefCell::new(None)
         }
@@ -1039,8 +1049,16 @@ impl Recorder {
         else {
             return Err(RecorderError::NoProcessSpecified)
         };
-
-        *ref_rec_mut = Some(RecorderInner::init(filename, rec_configs.fps_num, rec_configs.fps_den, rec_configs.screen_width, rec_configs.screen_height, proc_name).map_err(|e| RecorderError::FailedToStart(e.to_string()))?);
+    
+        *ref_rec_mut = Some(RecorderInner::init(
+            filename,
+            rec_configs.fps_num,
+            rec_configs.fps_den,
+            rec_configs.screen_width,
+            rec_configs.screen_height,
+            proc_name,
+            rec_configs.capture_audio,
+        ).map_err(|e| RecorderError::FailedToStart(e.to_string()))?);
         Ok(())
     }
 
@@ -1055,16 +1073,33 @@ impl Recorder {
 
         rec_inner.stop()
     }
+
+    pub fn set_capture_audio(&self, capture_audio: bool) {
+        self.rec_configs.borrow_mut().capture_audio = capture_audio;
+    }
+
+    pub fn is_audio_capture_enabled(&self) -> bool {
+        self.rec_configs.borrow().capture_audio
+    }
 }
 
 fn main() -> io::Result<()> {
+    env::set_var("RUST_BACKTRACE", "full");
     setup_logger()?;
+    
+    // Log system information
+    info!("OS: {}", env::consts::OS);
+    info!("Architecture: {}", env::consts::ARCH);
+
     info!("Application started");
 
     let rec = Recorder::new(30, 1, 1920, 1080);
 
     rec.set_process_name("League of Legends");
     info!("Set process name to League of Legends");
+
+    rec.set_capture_audio(false);
+    info!("Audio capture is {}", if rec.is_audio_capture_enabled() { "enabled" } else { "disabled" });
 
     std::thread::sleep(Duration::from_secs(3));
     info!("Starting recording");
