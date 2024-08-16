@@ -899,18 +899,22 @@ impl RecorderInner {
             let device_ptr = Arc::new(device);
             let dev_clone = device_ptr.clone();
 
+            let barrier = Arc::new(Barrier::new(if capture_audio { 2 } else { 1 }));
+
             let rec_clone = recording.clone();
+            let barrier_clone_video = barrier.clone();
             collect_video_handle = Some(std::thread::spawn(move || {
-                collect_frames(sender, rec_clone, hwnd, fps_num, fps_den, screen_width, screen_height, barrier, dev_clone, context_mutex)
+                collect_frames(sender, rec_clone, hwnd, fps_num, fps_den, screen_width, screen_height, barrier_clone_video, dev_clone, context_mutex)
             }));
 
             if capture_audio {
                 let rec_clone = recording.clone();
+                let barrier_clone_audio = barrier.clone();
                 collect_audio_handle = Some(std::thread::spawn(move || {
-                    collect_audio(sender_audio, rec_clone, process_id, barrier_clone)
+                    collect_audio(sender_audio, rec_clone, process_id, barrier_clone_audio)
                 }));
             } else {
-                info!("Audio capture disabled");
+                barrier.wait();
             }
 
             let rec_clone = recording.clone();
