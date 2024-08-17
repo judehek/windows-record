@@ -23,7 +23,7 @@ use std::{ptr, time::Duration};
 use std::sync::atomic::AtomicIsize;
 use std::sync::{Arc, Mutex, Condvar, Barrier};
 use std::thread::JoinHandle;
-use std::sync::mpsc::{Sender, Receiver, channel};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::fs::File;
 use std::io::{self, Write};
 use chrono::Local;
@@ -563,7 +563,7 @@ unsafe fn collect_frames(
     Ok(())
 }
 
-unsafe fn process_samples(
+fn process_samples(
     writer: SendableWriter, 
     rec_video: Receiver<SendableSample>,
     rec_audio: Receiver<SendableSample>, 
@@ -574,54 +574,95 @@ unsafe fn process_samples(
     capture_audio: bool,
 ) -> Result<()> {
     info!("Starting sample processing");
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    
+    unsafe {
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    }
 
-    let converter: IMFTransform = CoCreateInstance(&CLSID_VideoProcessorMFT, None, CLSCTX_INPROC_SERVER)?;
+    info!("Thread priority set to BELOW_NORMAL");
+
+    let converter: IMFTransform = unsafe { CoCreateInstance(&CLSID_VideoProcessorMFT, None, CLSCTX_INPROC_SERVER)? };
+    info!("Video processor transform created");
 
     // Set input media type (B8G8R8A8_UNORM)
+    unsafe {
     let input_type: IMFMediaType = MFCreateMediaType()?;
-    input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-    input_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_ARGB32)?;
-    input_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0.try_into().unwrap())?;
-    input_type.SetUINT64(&MF_MT_FRAME_SIZE, ((width as u64) << 32) | (height as u64))?;
-    input_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1 << 32) | 1)?;
-    input_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, (width * 4) as u32)?; 
-    converter.SetInputType(0, &input_type, 0)?;
-
+        input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+        input_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_ARGB32)?;
+        input_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0.try_into().unwrap())?;
+        input_type.SetUINT64(&MF_MT_FRAME_SIZE, ((width as u64) << 32) | (height as u64))?;
+        input_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1 << 32) | 1)?;
+        input_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, (width * 4) as u32)?; 
+        converter.SetInputType(0, &input_type, 0)?;
+    }
+    info!("Input media type set for converter");
 
     // Set output media type (NV12)
+    unsafe {
     let output_type: IMFMediaType = MFCreateMediaType()?;
-    output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-    output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
-    output_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0.try_into().unwrap())?;
-    output_type.SetUINT64(&MF_MT_FRAME_SIZE, ((width as u64) << 32) | (height as u64))?;
-    output_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, width as u32)?;
-    output_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1 << 32) | 1)?;
-    converter.SetOutputType(0, &output_type, 0)?;
+        output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+        output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+        output_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0.try_into().unwrap())?;
+        output_type.SetUINT64(&MF_MT_FRAME_SIZE, ((width as u64) << 32) | (height as u64))?;
+        output_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, width as u32)?;
+        output_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1 << 32) | 1)?;
+        converter.SetOutputType(0, &output_type, 0)?;
+    }
+    info!("Output media type set for converter");
 
-
-
+    let mut frame_count = 0;
+    let start_time = Instant::now();
 
     while recording.load(Ordering::Relaxed) {
         // Video
-        if let Ok(samp) = rec_video.try_recv() {
-            let start = Instant::now();
-            let cvt = convert_bgra_to_nv12(&device, &converter, &*samp.0, width, height)?;
-            debug!("Video frame converted in {:?}", start.elapsed());
-            writer.0.WriteSample(0, &cvt)?; 
-            debug!("Video frame written in {:?}", start.elapsed());
-            drop(samp);
-            drop(cvt);
+        match rec_video.try_recv() {
+            Ok(samp) => {
+                let start = Instant::now();
+                let cvt = unsafe { convert_bgra_to_nv12(&device, &converter, &*samp.0, width, height)? };
+                debug!("Video frame {} converted in {:?}", frame_count, start.elapsed());
+                
+                let write_start = Instant::now();
+                unsafe { writer.0.WriteSample(0, &cvt)? };
+                debug!("Video frame {} written in {:?}", frame_count, write_start.elapsed());
+                
+                frame_count += 1;
+                if frame_count % 100 == 0 {
+                    info!("Processed {} frames in {:?}", frame_count, start_time.elapsed());
+                }
+                
+                drop(samp);
+                drop(cvt);
+            },
+            Err(TryRecvError::Empty) => {
+                info!("No video sample available, continue to next iteration")
+            },
+            Err(e) => {
+                error!("Error receiving video sample: {:?}", e);
+                break;
+            }
         }
+        
         if capture_audio {
-            if let Ok(audio_samp) = rec_audio.try_recv() {
-                writer.0.WriteSample(1, &*audio_samp.0)?;
-                drop(audio_samp);
+            match rec_audio.try_recv() {
+                Ok(audio_samp) => {
+                    let write_start = Instant::now();
+                    unsafe { writer.0.WriteSample(1, &*audio_samp.0)? };
+                    debug!("Audio sample written in {:?}", write_start.elapsed());
+                    drop(audio_samp);
+                },
+                Err(TryRecvError::Empty) => {
+                    info!("No audio sample available, continue to next iteration")
+                },
+                Err(e) => {
+                    error!("Error receiving audio sample: {:?}", e);
+                    break;
+                }
             }
         }
     }
-    info!("Sample processing finished");
-    writer.0.Finalize()?;
+
+    info!("Sample processing finished. Processed {} frames in {:?}", frame_count, start_time.elapsed());
+    unsafe { writer.0.Finalize()? };
     Ok(())
 }
 
