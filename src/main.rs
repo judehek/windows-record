@@ -367,6 +367,20 @@ unsafe fn convert_bgra_to_nv12(
     
     let output_buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &nv12_surface, 0, FALSE)?;
 
+    // Log NV12 frame data
+    let mut locked_rect = DXGI_MAPPED_RECT::default();
+    nv12_surface.Map(&mut locked_rect, DXGI_MAP_READ)?;
+
+    let data_slice = std::slice::from_raw_parts(
+        locked_rect.pBits,
+        (width * height * 3 / 2) as usize, // NV12 format
+    );
+
+    // Log first 100 bytes of NV12 frame data
+    info!("NV12 Frame data (first 100 bytes): {:?}", &data_slice[..100]);
+
+    nv12_surface.Unmap()?;
+
     output_sample.AddBuffer(&output_buffer)?;
     //output_sample.SetSampleDuration(duration)?;
     //output_sample.SetSampleTime(time)?;
@@ -508,12 +522,31 @@ unsafe fn collect_frames(
                             &blank_texture
                         );
                     }
-                    drop(context);
+
+                    let context = context_mutex.lock().unwrap();
+                    let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
+                    context.Map(
+                        &staging_texture,
+                        0,
+                        D3D11_MAP_READ,
+                        0,
+                        Some(&mut mapped_resource),
+                    )?;
+
+                    let data_slice = std::slice::from_raw_parts(
+                        mapped_resource.pData as *const u8,
+                        (width * height * 4) as usize,
+                    );
+
+                    // Log first 100 bytes of frame data
+                    info!("Frame {} data (first 100 bytes): {:?}", frame_count, &data_slice[..100]);
+
+                    context.Unmap(&staging_texture, 0);
 
                     while accumulated_delay >= frame_duration {
                         println!("Duping a frame to catch up");
                         println!("Accum: {:?}, duration: {:?}", accumulated_delay, frame_duration);
-
+                
                         let samp = create_dxgi_sample(&staging_texture, fps_num)?;
                         samp.SetSampleTime((frame_count as i64 * 10_000_000i64 / fps_num as i64) as i64)?;
                         send.send(SendableSample(Arc::new(samp))).expect("Failed to send sample");
@@ -525,6 +558,10 @@ unsafe fn collect_frames(
                     
                     let samp = create_dxgi_sample(&staging_texture, fps_num)?;
                     samp.SetSampleTime((frame_count as i64 * 10_000_000i64 / fps_num as i64) as i64)?;
+
+                    let current_time = Instant::now();
+                    info!("Processing frame {} at {:?}", frame_count, current_time);
+
                     send.send(SendableSample(Arc::new(samp))).expect("Failed to send sample");
                     
                     frame_count += 1;
@@ -534,20 +571,18 @@ unsafe fn collect_frames(
 
                     if current_time > next_frame_time {
                         let overrun = current_time.duration_since(next_frame_time);
-                        //println!("Frame {} overran by {:?}", frame_count, overrun);
-                        // last_frame_overran = true;
                         accumulated_delay += overrun;
                     } else {
                         let sleep_time = next_frame_time.duration_since(current_time);
                         spin_sleep::sleep(sleep_time);
                     }
-
-
-                    // Unmap staging texture
-                    // context_mutex.lock().unwrap().Unmap(&staging_texture, 0);
+                
                     // Release frame
                     duplication.ReleaseFrame()?;
                     trace!("Collected frame {}", frame_count);
+
+                    // Temp sleep
+                    std::thread::sleep(Duration::from_millis(100));
                 }
             }
             Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => {
