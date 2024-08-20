@@ -543,7 +543,7 @@ unsafe fn collect_frames(
 
                     context.Unmap(&staging_texture, 0);
 
-                    while accumulated_delay >= frame_duration {
+                    /*while accumulated_delay >= frame_duration {
                         println!("Duping a frame to catch up");
                         println!("Accum: {:?}, duration: {:?}", accumulated_delay, frame_duration);
                 
@@ -554,7 +554,7 @@ unsafe fn collect_frames(
                         next_frame_time += frame_duration;
                         accumulated_delay -= frame_duration;
                         num_duped += 1;
-                    }
+                    }*/
                     
                     let samp = create_dxgi_sample(&staging_texture, fps_num)?;
                     samp.SetSampleTime((frame_count as i64 * 10_000_000i64 / fps_num as i64) as i64)?;
@@ -582,7 +582,7 @@ unsafe fn collect_frames(
                     trace!("Collected frame {}", frame_count);
 
                     // Temp sleep
-                    std::thread::sleep(Duration::from_millis(100));
+                    std::thread::sleep(Duration::from_millis(500));
                 }
             }
             Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => {
@@ -669,7 +669,7 @@ fn process_samples(
                 drop(cvt);
             },
             Err(TryRecvError::Empty) => {
-                info!("No video sample available, continue to next iteration")
+                //no video sample
             },
             Err(e) => {
                 error!("Error receiving video sample: {:?}", e);
@@ -686,7 +686,7 @@ fn process_samples(
                     drop(audio_samp);
                 },
                 Err(TryRecvError::Empty) => {
-                    info!("No audio sample available, continue to next iteration")
+                    //no audio sample
                 },
                 Err(e) => {
                     error!("Error receiving audio sample: {:?}", e);
