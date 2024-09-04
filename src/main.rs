@@ -1,4 +1,5 @@
 use log::{debug, error, info, trace, warn, LevelFilter};
+use logger::setup_logger;
 use thiserror::Error;
 use windows::{
     core::*,
@@ -16,7 +17,7 @@ use windows::{
 };
 use std::cell::RefCell;
 use std::mem::{size_of, ManuallyDrop };
-use std::{env, panic};
+use std::{env, io, panic};
 use std::sync::atomic::{ AtomicBool, Ordering };
 use std::time::Instant;
 use std::{ptr, time::Duration};
@@ -24,11 +25,8 @@ use std::sync::atomic::AtomicIsize;
 use std::sync::{Arc, Mutex, Condvar, Barrier};
 use std::thread::JoinHandle;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
-use std::fs::File;
-use std::io::{self, Write};
-use chrono::Local;
-use env_logger::{Builder, Target};
-use lazy_static::lazy_static;
+
+mod logger;
 
 struct SendableSample(Arc<IMFSample>);
 unsafe impl Send for SendableSample {}
@@ -46,118 +44,6 @@ struct RecorderInner {
     collect_video_handle: RefCell<Option<JoinHandle<Result<()>>>>,
     process_handle: RefCell<Option<JoinHandle<Result<()>>>>,
     collect_audio_handle: RefCell<Option<JoinHandle<Result<()>>>>,
-}
-
-struct SyncFile(Mutex<File>);
-
-impl Write for SyncFile {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap().write(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.0.lock().unwrap().flush()
-    }
-}
-
-struct MultiWriter {
-    file: SyncFile,
-}
-
-impl MultiWriter {
-    fn new(file: File) -> Self {
-        MultiWriter {
-            file: SyncFile(Mutex::new(file)),
-        }
-    }
-}
-
-impl Write for MultiWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let file_result = self.file.write(buf);
-        let stdout_result = io::stdout().lock().write(buf);
-        
-        match (file_result, stdout_result) {
-            (Ok(file_len), Ok(stdout_len)) => Ok(file_len.max(stdout_len)),
-            (Ok(len), Err(_)) | (Err(_), Ok(len)) => Ok(len),
-            (Err(e), Err(_)) => Err(e),
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.file.flush()?;
-        io::stdout().flush()
-    }
-}
-
-lazy_static! {
-    static ref LOGGER: Mutex<Option<Mutex<MultiWriter>>> = Mutex::new(None);
-}
-
-fn setup_logger() -> io::Result<()> {
-    // Create a timestamp for the log file name
-    let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let log_file_name = format!("application_log_{}.txt", timestamp);
-
-    // Open the log file
-    let file = File::create(log_file_name)?;
-    let multi_writer = MultiWriter::new(file);
-
-    // Store the logger globally
-    *LOGGER.lock().unwrap() = Some(Mutex::new(multi_writer));
-
-    // Create a custom logger
-    let mut builder = Builder::new();
-    builder.filter_level(LevelFilter::Debug);  // Set to Debug level
-    
-    // Use our custom MultiWriter
-    builder.target(Target::Pipe(Box::new(CustomWrite)));
-
-    builder.format(|buf, record| {
-        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-        writeln!(buf, "{} [{}] - {}", timestamp, record.level(), record.args())
-    });
-
-    // Initialize the logger
-    builder.init();
-
-    // Set up the panic hook
-    std::panic::set_hook(Box::new(|panic_info| {
-        error!("PANIC: {}", panic_info);
-        if let Some(location) = panic_info.location() {
-            error!("PANIC occurred in file '{}' at line {}", location.file(), location.line());
-        }
-        
-        // Ensure all logs are flushed
-        if let Some(ref writer) = *LOGGER.lock().unwrap() {
-            let _ = writer.lock().unwrap().flush();
-        }
-    }));
-
-    info!("Logger initialized with output to file and stdout");
-    Ok(())
-}
-
-struct CustomWrite;
-
-impl io::Write for CustomWrite {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if let Some(ref writer) = *LOGGER.lock().unwrap() {
-            let mut writer = writer.lock().unwrap();
-            writer.write(buf)
-        } else {
-            Ok(0)
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        if let Some(ref writer) = *LOGGER.lock().unwrap() {
-            let mut writer = writer.lock().unwrap();
-            writer.flush()
-        } else {
-            Ok(())
-        }
-    }
 }
 
 unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width: u32, s_height: u32, capture_audio: bool) -> Result<IMFSinkWriter> {
@@ -185,7 +71,7 @@ unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width
     video_output_type.SetUINT64(&MF_MT_FRAME_SIZE, ((s_width as u64) << 32) | (s_height as u64))?;
     video_output_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1 << 32) | 1u64)?;
     video_output_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0.try_into().unwrap())?;
-    //video_output_type.SetUINT32(&MF_MT_VIDEO_PROFILE, eAVEncH264VProfile_High.0.try_into().unwrap())?;
+    video_output_type.SetUINT32(&MF_MT_VIDEO_PROFILE, eAVEncH264VProfile_High.0.try_into().unwrap())?;
 
     // Video in Type
     let video_media_type: IMFMediaType = MFCreateMediaType()?;
@@ -212,7 +98,7 @@ unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width
     if let Some(attrs) = &config_attrs {
         attrs.SetUINT32(&CODECAPI_AVEncCommonRateControlMode, eAVEncCommonRateControlMode_GlobalVBR.0.try_into().unwrap())?;
         attrs.SetUINT32(&CODECAPI_AVEncCommonMeanBitRate, 5000000)?; // 1 Mbps
-        //attrs.SetUINT32(&CODECAPI_AVEncMPVDefaultBPictureCount, 0)?;
+        attrs.SetUINT32(&CODECAPI_AVEncMPVDefaultBPictureCount, 0)?;
         attrs.SetUINT32(&CODECAPI_AVEncCommonQuality, 70)?;
         attrs.SetUINT32(&CODECAPI_AVEncCommonLowLatency, 1)?;
     }
@@ -512,7 +398,7 @@ unsafe fn collect_frames(
                     device.CreateTexture2D(&desc, None, Some(&mut staging_texture))?;
                     let staging_texture = staging_texture.unwrap();
 
-                    /*let context = context_mutex.lock().unwrap();
+                    let context = context_mutex.lock().unwrap();
                     if is_target_window {
                         context.CopyResource(
                             &staging_texture,
@@ -524,8 +410,9 @@ unsafe fn collect_frames(
                             &blank_texture
                         );
                     }
+                    drop(context);
 
-                    let context = context_mutex.lock().unwrap();
+                    /*let context = context_mutex.lock().unwrap();
                     let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
                     context.Map(
                         &staging_texture,
@@ -584,7 +471,7 @@ unsafe fn collect_frames(
                     trace!("Collected frame {}", frame_count);
 
                     // Temp sleep
-                    std::thread::sleep(Duration::from_millis(500));
+                    //std::thread::sleep(Duration::from_millis(500));
                 }
             }
             Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => {

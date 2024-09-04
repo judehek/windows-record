@@ -2,3 +2,4 @@
 *.mp4
 /.vscode
 /.cargo
+*.txt
