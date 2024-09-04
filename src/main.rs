@@ -160,7 +160,7 @@ impl io::Write for CustomWrite {
     }
 }
 
-unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width: u32, s_height: u32) -> Result<IMFSinkWriter> {
+unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width: u32, s_height: u32, capture_audio: bool) -> Result<IMFSinkWriter> {
     debug!("Creating sink writer for file: {}", filename);
     let mut attributes: Option<IMFAttributes> = None;
     MFCreateAttributes(&mut attributes, 0)?;
@@ -220,29 +220,31 @@ unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width
     sink_writer.SetInputMediaType(stream_val, &video_media_type, config_attrs.as_ref())?;
     
     // Audio Type
-    let audio_output_type: IMFMediaType = MFCreateMediaType()?;
-    audio_output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
-    audio_output_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC)?;
-    audio_output_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
-    audio_output_type.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, 44100)?;
-    audio_output_type.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, 2)?;
-    audio_output_type.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 12000)?;
+    if capture_audio {
+        let audio_output_type: IMFMediaType = MFCreateMediaType()?;
+        audio_output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+        audio_output_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC)?;
+        audio_output_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
+        audio_output_type.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, 44100)?;
+        audio_output_type.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, 2)?;
+        audio_output_type.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 12000)?;
 
 
-    let audio_media_type: IMFMediaType = MFCreateMediaType()?;
-    let wav_format: WAVEFORMATEX = WAVEFORMATEX {
-        wFormatTag: WAVE_FORMAT_PCM.try_into().unwrap(),
-        nChannels: 2,
-        nSamplesPerSec: 44100,
-        nAvgBytesPerSec: 176400,
-        nBlockAlign: 4,
-        wBitsPerSample: 16,
-        cbSize: 0
-    };
+        let audio_media_type: IMFMediaType = MFCreateMediaType()?;
+        let wav_format: WAVEFORMATEX = WAVEFORMATEX {
+            wFormatTag: WAVE_FORMAT_PCM.try_into().unwrap(),
+            nChannels: 2,
+            nSamplesPerSec: 44100,
+            nAvgBytesPerSec: 176400,
+            nBlockAlign: 4,
+            wBitsPerSample: 16,
+            cbSize: 0
+        };
 
-    MFInitMediaTypeFromWaveFormatEx(&audio_media_type, &wav_format, size_of::<WAVEFORMATEX>().try_into().unwrap())?;
-    let stream_val = sink_writer.AddStream(&audio_output_type)?;
-    sink_writer.SetInputMediaType(stream_val, &audio_media_type, None)?;
+        MFInitMediaTypeFromWaveFormatEx(&audio_media_type, &wav_format, size_of::<WAVEFORMATEX>().try_into().unwrap())?;
+        let stream_val = sink_writer.AddStream(&audio_output_type)?;
+        sink_writer.SetInputMediaType(stream_val, &audio_media_type, None)?;
+    }
 
     info!("Sink writer created successfully");
     Ok(sink_writer)
@@ -908,7 +910,7 @@ impl RecorderInner {
             CoInitializeEx(Some(ptr::null()), COINIT_MULTITHREADED)?;
             MFStartup(MF_VERSION, MFSTARTUP_FULL)?;
 
-            let media_sink = create_sink_writer(filename, fps_num, fps_den, screen_width, screen_height)?;
+            let media_sink = create_sink_writer(filename, fps_num, fps_den, screen_width, screen_height, capture_audio)?;
 
             // Begin recording prob on new thread but check proc exists first
             let hwnd = find_window_by_substring(process_name).ok_or(Error::new(HRESULT(-1), HSTRING::from("No Window Found")))?;
