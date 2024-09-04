@@ -185,7 +185,7 @@ unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width
     video_output_type.SetUINT64(&MF_MT_FRAME_SIZE, ((s_width as u64) << 32) | (s_height as u64))?;
     video_output_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1 << 32) | 1u64)?;
     video_output_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0.try_into().unwrap())?;
-    video_output_type.SetUINT32(&MF_MT_VIDEO_PROFILE, eAVEncH264VProfile_High.0.try_into().unwrap())?;
+    //video_output_type.SetUINT32(&MF_MT_VIDEO_PROFILE, eAVEncH264VProfile_High.0.try_into().unwrap())?;
 
     // Video in Type
     let video_media_type: IMFMediaType = MFCreateMediaType()?;
@@ -212,7 +212,7 @@ unsafe fn create_sink_writer(filename: &str, fps_num: u32, fps_den: u32, s_width
     if let Some(attrs) = &config_attrs {
         attrs.SetUINT32(&CODECAPI_AVEncCommonRateControlMode, eAVEncCommonRateControlMode_GlobalVBR.0.try_into().unwrap())?;
         attrs.SetUINT32(&CODECAPI_AVEncCommonMeanBitRate, 5000000)?; // 1 Mbps
-        attrs.SetUINT32(&CODECAPI_AVEncMPVDefaultBPictureCount, 0)?;
+        //attrs.SetUINT32(&CODECAPI_AVEncMPVDefaultBPictureCount, 0)?;
         attrs.SetUINT32(&CODECAPI_AVEncCommonQuality, 70)?;
         attrs.SetUINT32(&CODECAPI_AVEncCommonLowLatency, 1)?;
     }
@@ -370,7 +370,7 @@ unsafe fn convert_bgra_to_nv12(
     let output_buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &nv12_surface, 0, FALSE)?;
 
     // Log NV12 frame data
-    let mut locked_rect = DXGI_MAPPED_RECT::default();
+    /*let mut locked_rect = DXGI_MAPPED_RECT::default();
     nv12_surface.Map(&mut locked_rect, DXGI_MAP_READ)?;
 
     let data_slice = std::slice::from_raw_parts(
@@ -381,7 +381,7 @@ unsafe fn convert_bgra_to_nv12(
     // Log first 100 bytes of NV12 frame data
     info!("NV12 Frame data (first 100 bytes): {:?}", &data_slice[..100]);
 
-    nv12_surface.Unmap()?;
+    nv12_surface.Unmap()?;*/
 
     output_sample.AddBuffer(&output_buffer)?;
     //output_sample.SetSampleDuration(duration)?;
@@ -512,7 +512,7 @@ unsafe fn collect_frames(
                     device.CreateTexture2D(&desc, None, Some(&mut staging_texture))?;
                     let staging_texture = staging_texture.unwrap();
 
-                    let context = context_mutex.lock().unwrap();
+                    /*let context = context_mutex.lock().unwrap();
                     if is_target_window {
                         context.CopyResource(
                             &staging_texture,
@@ -543,9 +543,9 @@ unsafe fn collect_frames(
                     // Log first 100 bytes of frame data
                     info!("Frame {} data (first 100 bytes): {:?}", frame_count, &data_slice[..100]);
 
-                    context.Unmap(&staging_texture, 0);
+                    context.Unmap(&staging_texture, 0);*/
 
-                    /*while accumulated_delay >= frame_duration {
+                    while accumulated_delay >= frame_duration {
                         println!("Duping a frame to catch up");
                         println!("Accum: {:?}, duration: {:?}", accumulated_delay, frame_duration);
                 
@@ -556,7 +556,7 @@ unsafe fn collect_frames(
                         next_frame_time += frame_duration;
                         accumulated_delay -= frame_duration;
                         num_duped += 1;
-                    }*/
+                    }
                     
                     let samp = create_dxgi_sample(&staging_texture, fps_num)?;
                     samp.SetSampleTime((frame_count as i64 * 10_000_000i64 / fps_num as i64) as i64)?;
@@ -927,9 +927,7 @@ impl RecorderInner {
 
             let barrier = Arc::new(Barrier::new(2));
             let barrier_clone = barrier.clone();
-
-
-
+            
             let mut device: Option<ID3D11Device> = None;
             let mut context: Option<ID3D11DeviceContext> = None;
             let feature_levels = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_9_3, D3D_FEATURE_LEVEL_9_2, D3D_FEATURE_LEVEL_9_1];
