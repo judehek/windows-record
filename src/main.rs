@@ -24,7 +24,7 @@ fn main() -> io::Result<()> {
     rec.set_process_name("League of Legends");
     info!("Set process name to League of Legends");
 
-    rec.set_capture_audio(false);
+    rec.set_capture_audio(true);
     info!(
         "Audio capture is {}",
         if rec.is_audio_capture_enabled() {
@@ -44,7 +44,7 @@ fn main() -> io::Result<()> {
     }
     println!("{:?}", res);
 
-    std::thread::sleep(Duration::from_secs(15));
+    std::thread::sleep(Duration::from_secs(10));
     info!("Stopping recording");
 
     let res2 = rec.stop_recording();

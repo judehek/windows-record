@@ -36,6 +36,7 @@ features = [
     "Media_MediaProperties",
     "Win32_Storage_Xps",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_Performance",
     "implement"
 ]
 

@@ -10,6 +10,7 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Media::Audio::*;
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::*;
+use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::*;
 use StructuredStorage::PROPVARIANT;
 
@@ -76,6 +77,11 @@ pub unsafe fn collect_audio(
 ) -> Result<()> {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 
+    // Get QPC frequency at the start
+    let mut qpc_freq = 0;
+    QueryPerformanceFrequency(&mut qpc_freq);
+    let ticks_to_hns = 10000000.0 / qpc_freq as f64; // Convert QPC ticks to 100ns units
+
     let wave_format = WAVEFORMATEX {
         wFormatTag: WAVE_FORMAT_PCM.try_into().unwrap(),
         nChannels: 2,
@@ -93,22 +99,42 @@ pub unsafe fn collect_audio(
         std::time::Duration::from_nanos((1000000000.0 / wave_format.nSamplesPerSec as f64) as u64);
     let packet_duration_hns = packet_duration.as_nanos() as i64 / 100;
 
+    // Get initial QPC value for relative timing
+    let mut start_qpc_i64: i64 = 0;
+    QueryPerformanceCounter(&mut start_qpc_i64);
+    let start_qpc = start_qpc_i64 as u64;
+
     audio_client.Start()?;
-    let mut packet_count = 0;
     started.wait();
 
     while recording.load(Ordering::Relaxed) {
         let next_packet_size = capture_client.GetNextPacketSize()?;
 
         if next_packet_size > 0 {
-            let (buffer, num_frames_available, flags) = get_audio_buffer(&capture_client)?;
+            let mut buffer = ptr::null_mut();
+            let mut num_frames_available = 0;
+            let mut flags = 0;
+            let mut device_position = 0;
+            let mut qpc_position: u64 = 0;
+
+            capture_client.GetBuffer(
+                &mut buffer,
+                &mut num_frames_available,
+                &mut flags,
+                Some(&mut device_position),
+                Some(&mut qpc_position as *mut u64), // Pass as raw pointer
+            )?;
 
             if (flags & (AUDCLNT_BUFFERFLAGS_SILENT.0 as u32)) == 0 {
+                // Convert QPC time to 100ns units relative to start
+                let relative_qpc = qpc_position - start_qpc;
+                let time_hns = (relative_qpc as f64 * ticks_to_hns) as i64;
+
                 let sample = create_audio_sample(
                     buffer,
                     num_frames_available,
                     &wave_format,
-                    packet_count,
+                    time_hns, // Now passing converted time in 100ns units
                     packet_duration_hns,
                 )?;
 
@@ -117,7 +143,6 @@ pub unsafe fn collect_audio(
             }
 
             capture_client.ReleaseBuffer(num_frames_available)?;
-            packet_count += num_frames_available;
         } else {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
@@ -174,14 +199,14 @@ unsafe fn get_audio_buffer(capture_client: &IAudioCaptureClient) -> Result<(*mut
     let mut num_frames_available = 0;
     let mut flags = 0;
     let mut device_position = 0;
-    let mut qpc_position = 0;
+    let mut qpc_position: u64 = 0;
 
     capture_client.GetBuffer(
         &mut buffer,
         &mut num_frames_available,
         &mut flags,
         Some(&mut device_position),
-        Some(&mut qpc_position),
+        Some(&mut qpc_position as *mut u64),
     )?;
 
     Ok((buffer, num_frames_available, flags))
@@ -191,7 +216,7 @@ unsafe fn create_audio_sample(
     buffer: *mut u8,
     num_frames: u32,
     wave_format: &WAVEFORMATEX,
-    packet_count: u32,
+    time_hns: i64, // Changed to i64 since we're now passing 100ns units directly
     packet_duration_hns: i64,
 ) -> Result<IMFSample> {
     let buffer_size = num_frames as usize * wave_format.nBlockAlign as usize;
@@ -214,7 +239,9 @@ unsafe fn create_audio_sample(
     media_buffer.Unlock()?;
 
     sample.AddBuffer(&media_buffer)?;
-    sample.SetSampleTime(packet_count as i64 * packet_duration_hns)?;
+
+    // Now using proper 100ns units directly
+    sample.SetSampleTime(time_hns)?;
     sample.SetSampleDuration(num_frames as i64 * packet_duration_hns)?;
 
     Ok(sample)
