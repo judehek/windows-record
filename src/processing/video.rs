@@ -3,6 +3,7 @@ use std::mem::ManuallyDrop;
 use windows::core::{ComInterface, Result};
 use windows::Win32::Foundation::FALSE;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
+use windows::Win32::Graphics::Dxgi::IDXGISurface;
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 
@@ -59,9 +60,30 @@ pub unsafe fn convert_bgra_to_nv12(
     let (nv12_texture, output_sample) = create_nv12_output(device, width, height)?;
 
     // Process the frame
-    process_frame(converter, in_sample, &output_sample)?;
+    converter.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
+    converter.ProcessInput(0, in_sample, 0)?;
+    converter.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
 
-    Ok(output_sample)
+    let mut output = MFT_OUTPUT_DATA_BUFFER {
+        pSample: ManuallyDrop::new(Some(output_sample)),
+        dwStatus: 0,
+        pEvents: ManuallyDrop::new(None),
+        dwStreamID: 0,
+    };
+
+    let mut output_slice = std::slice::from_mut(&mut output);
+    let mut status: u32 = 0;
+
+    if let Err(e) = converter.ProcessOutput(0, output_slice, &mut status) {
+        device.GetDeviceRemovedReason()?;
+        return Err(e);
+    }
+
+    ManuallyDrop::drop(&mut output_slice[0].pEvents);
+    let final_sample = ManuallyDrop::take(&mut output_slice[0].pSample)
+        .ok_or(windows::core::Error::from_win32())?;
+
+    Ok(final_sample)
 }
 
 unsafe fn create_nv12_output(
@@ -96,9 +118,9 @@ unsafe fn create_nv12_output(
     // Create output sample
     let output_sample: IMFSample = MFCreateSample()?;
 
-    // First cast to ID3D11Resource, then use that interface for creating the buffer
-    let nv12_resource: ID3D11Resource = nv12_texture.cast()?;
-    let output_buffer = MFCreateDXGISurfaceBuffer(&ID3D11Resource::IID, &nv12_resource, 0, FALSE)?;
+    // Cast to IDXGISurface instead of ID3D11Resource
+    let nv12_surface: IDXGISurface = nv12_texture.cast()?;
+    let output_buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &nv12_surface, 0, FALSE)?;
 
     output_sample.AddBuffer(&output_buffer)?;
 

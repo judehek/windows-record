@@ -1,3 +1,5 @@
+use std::ptr;
+
 use windows::core::{ComInterface, Result};
 use windows::Win32::Foundation::TRUE;
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
@@ -201,7 +203,7 @@ pub unsafe fn create_dxgi_sample(texture: &ID3D11Texture2D, fps_num: u32) -> Res
 pub unsafe fn init_media_foundation() -> Result<()> {
     use windows::Win32::System::Com::*;
 
-    CoInitializeEx(None, COINIT_MULTITHREADED)?;
+    CoInitializeEx(Some(ptr::null()), COINIT_MULTITHREADED)?;
     MFStartup(MF_VERSION, MFSTARTUP_FULL)?;
 
     Ok(())
