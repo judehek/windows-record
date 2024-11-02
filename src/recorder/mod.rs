@@ -29,11 +29,6 @@ impl Recorder {
             process_name: RefCell::new(None),
         };
 
-        // Initialize logger with default configuration
-        if let Some(log_config) = recorder.config.borrow().log_config() {
-            setup_logger(log_config).map_err(|e| RecorderError::LoggerError(e.to_string()))?;
-        }
-
         Ok(recorder)
     }
 
@@ -89,21 +84,40 @@ impl Recorder {
         self.config.borrow().capture_audio()
     }
 
-    // Logger configuration methods
     pub fn set_log_directory<P: AsRef<Path>>(&self, dir: P) -> Result<()> {
         let mut config = self.config.borrow_mut();
         let log_config = LoggerConfig::default().with_log_dir(dir);
-        setup_logger(log_config.clone()).map_err(|e| RecorderError::LoggerError(e.to_string()))?;
-        config.set_log_config(log_config);
-        Ok(())
+
+        match setup_logger(log_config.clone()) {
+            Ok(_) => {
+                config.set_log_config(log_config);
+                Ok(())
+            }
+            Err(e) => {
+                // Ignore "already initialized" errors
+                if e.to_string().contains("already initialized") {
+                    Ok(())
+                } else {
+                    Err(RecorderError::LoggerError(e.to_string()))
+                }
+            }
+        }
     }
 
     pub fn disable_logging(&self) -> Result<()> {
         let mut config = self.config.borrow_mut();
         config.disable_logging();
-        // Re-initialize logger with disabled configuration
-        setup_logger(LoggerConfig::default().disable_logging())
-            .map_err(|e| RecorderError::LoggerError(e.to_string()))?;
-        Ok(())
+
+        match setup_logger(LoggerConfig::default().disable_logging()) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // Ignore "already initialized" errors
+                if e.to_string().contains("already initialized") {
+                    Ok(())
+                } else {
+                    Err(RecorderError::LoggerError(e.to_string()))
+                }
+            }
+        }
     }
 }

@@ -7,6 +7,10 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+lazy_static! {
+    static ref LOGGER_INITIALIZED: Mutex<bool> = Mutex::new(false);
+}
+
 #[derive(Debug, Clone)]
 pub struct LoggerConfig {
     enabled: bool,
@@ -128,51 +132,60 @@ lazy_static! {
 }
 
 pub fn setup_logger(config: LoggerConfig) -> io::Result<()> {
+    // Check if logger is already initialized
+    let mut initialized = LOGGER_INITIALIZED.lock().unwrap();
+    if *initialized {
+        // If already initialized and logging is disabled, we can skip
+        if !config.enabled {
+            return Ok(());
+        }
+        // Otherwise, return an error
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Logger already initialized",
+        ));
+    }
+
     if !config.enabled {
+        *initialized = true;
         return Ok(());
     }
 
     let file = if let Some(log_dir) = config.log_dir {
-        // Create the directory if it doesn't exist
         std::fs::create_dir_all(&log_dir)?;
-
-        // Create a timestamp for the log file name
         let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
         let log_file_name = format!("application_log_{}.txt", timestamp);
         let log_file_path = log_dir.join(log_file_name);
-
         Some(File::create(log_file_path)?)
     } else {
+        println!("no log dir");
         None
     };
 
     let multi_writer = MultiWriter::new(file, true);
-
-    // Store the logger globally
     *LOGGER.lock().unwrap() = Some(Mutex::new(multi_writer));
 
-    // Create a custom logger
     let mut builder = Builder::new();
-    builder.filter_level(config.log_level);
-
-    // Use our custom MultiWriter
-    builder.target(Target::Pipe(Box::new(CustomWrite)));
-
-    builder.format(|buf, record| {
-        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-        writeln!(
-            buf,
-            "{} [{}] - {}",
-            timestamp,
-            record.level(),
-            record.args()
-        )
-    });
+    builder
+        .filter_level(config.log_level)
+        .target(Target::Pipe(Box::new(CustomWrite)))
+        .format(|buf, record| {
+            let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+            writeln!(
+                buf,
+                "{} [{}] - {}",
+                timestamp,
+                record.level(),
+                record.args()
+            )
+        });
 
     // Initialize the logger
-    builder.init();
+    if let Err(e) = builder.try_init() {
+        return Err(io::Error::new(io::ErrorKind::Other, e.to_string()));
+    }
 
-    // Set up the panic hook
+    // Set panic hook
     std::panic::set_hook(Box::new(|panic_info| {
         error!("PANIC: {}", panic_info);
         if let Some(location) = panic_info.location() {
@@ -183,12 +196,12 @@ pub fn setup_logger(config: LoggerConfig) -> io::Result<()> {
             );
         }
 
-        // Ensure all logs are flushed
         if let Some(ref writer) = *LOGGER.lock().unwrap() {
             let _ = writer.lock().unwrap().flush();
         }
     }));
 
+    *initialized = true;
     info!("Logger initialized");
     Ok(())
 }
@@ -198,8 +211,7 @@ struct CustomWrite;
 impl io::Write for CustomWrite {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if let Some(ref writer) = *LOGGER.lock().unwrap() {
-            let mut writer = writer.lock().unwrap();
-            writer.write(buf)
+            writer.lock().unwrap().write(buf)
         } else {
             Ok(0)
         }
@@ -207,8 +219,7 @@ impl io::Write for CustomWrite {
 
     fn flush(&mut self) -> io::Result<()> {
         if let Some(ref writer) = *LOGGER.lock().unwrap() {
-            let mut writer = writer.lock().unwrap();
-            writer.flush()
+            writer.lock().unwrap().flush()
         } else {
             Ok(())
         }

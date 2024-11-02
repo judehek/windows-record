@@ -9,10 +9,10 @@ fn main() -> Result<()> {
     let rec = Recorder::new(30, 1, 1920, 1080)?;
 
     // optionally disable logging
-    // rec.disable_logging()?;
+    //rec.disable_logging()?;
 
     // or set a custom log directory
-    // rec.set_log_directory("./logs")?;
+    rec.set_log_directory("./logs")?;
 
     // log system information (these will only show if logging is enabled)
     info!("OS: {}", env::consts::OS);
