@@ -4,7 +4,46 @@ use lazy_static::lazy_static;
 use log::{error, info, LevelFilter};
 use std::fs::File;
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+#[derive(Debug, Clone)]
+pub struct LoggerConfig {
+    enabled: bool,
+    log_dir: Option<PathBuf>,
+    log_level: LevelFilter,
+}
+
+impl Default for LoggerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            log_dir: None,
+            log_level: LevelFilter::Debug,
+        }
+    }
+}
+
+impl LoggerConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_log_dir<P: AsRef<Path>>(mut self, dir: P) -> Self {
+        self.log_dir = Some(dir.as_ref().to_path_buf());
+        self
+    }
+
+    pub fn with_log_level(mut self, level: LevelFilter) -> Self {
+        self.log_level = level;
+        self
+    }
+
+    pub fn disable_logging(mut self) -> Self {
+        self.enabled = false;
+        self
+    }
+}
 
 struct SyncFile(Mutex<File>);
 
@@ -19,32 +58,68 @@ impl Write for SyncFile {
 }
 
 struct MultiWriter {
-    file: SyncFile,
+    file: Option<SyncFile>,
+    write_to_stdout: bool,
 }
 
 impl MultiWriter {
-    fn new(file: File) -> Self {
+    fn new(file: Option<File>, write_to_stdout: bool) -> Self {
         MultiWriter {
-            file: SyncFile(Mutex::new(file)),
+            file: file.map(|f| SyncFile(Mutex::new(f))),
+            write_to_stdout,
         }
     }
 }
 
 impl Write for MultiWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let file_result = self.file.write(buf);
-        let stdout_result = io::stdout().lock().write(buf);
+        let mut max_written = 0;
 
-        match (file_result, stdout_result) {
-            (Ok(file_len), Ok(stdout_len)) => Ok(file_len.max(stdout_len)),
-            (Ok(len), Err(_)) | (Err(_), Ok(len)) => Ok(len),
-            (Err(e), Err(_)) => Err(e),
+        if let Some(ref mut file) = self.file {
+            if let Ok(written) = file.write(buf) {
+                max_written = written;
+            }
+        }
+
+        if self.write_to_stdout {
+            if let Ok(written) = io::stdout().lock().write(buf) {
+                max_written = max_written.max(written);
+            }
+        }
+
+        if max_written > 0 {
+            Ok(max_written)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Failed to write to any output",
+            ))
         }
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.file.flush()?;
-        io::stdout().flush()
+        let mut failed = false;
+
+        if let Some(ref mut file) = self.file {
+            if file.flush().is_err() {
+                failed = true;
+            }
+        }
+
+        if self.write_to_stdout {
+            if io::stdout().flush().is_err() {
+                failed = true;
+            }
+        }
+
+        if failed {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Failed to flush one or more outputs",
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -52,21 +127,33 @@ lazy_static! {
     static ref LOGGER: Mutex<Option<Mutex<MultiWriter>>> = Mutex::new(None);
 }
 
-pub fn setup_logger() -> io::Result<()> {
-    // Create a timestamp for the log file name
-    let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let log_file_name = format!("application_log_{}.txt", timestamp);
+pub fn setup_logger(config: LoggerConfig) -> io::Result<()> {
+    if !config.enabled {
+        return Ok(());
+    }
 
-    // Open the log file
-    let file = File::create(log_file_name)?;
-    let multi_writer = MultiWriter::new(file);
+    let file = if let Some(log_dir) = config.log_dir {
+        // Create the directory if it doesn't exist
+        std::fs::create_dir_all(&log_dir)?;
+
+        // Create a timestamp for the log file name
+        let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+        let log_file_name = format!("application_log_{}.txt", timestamp);
+        let log_file_path = log_dir.join(log_file_name);
+
+        Some(File::create(log_file_path)?)
+    } else {
+        None
+    };
+
+    let multi_writer = MultiWriter::new(file, true);
 
     // Store the logger globally
     *LOGGER.lock().unwrap() = Some(Mutex::new(multi_writer));
 
     // Create a custom logger
     let mut builder = Builder::new();
-    builder.filter_level(LevelFilter::Debug); // Set to Debug level
+    builder.filter_level(config.log_level);
 
     // Use our custom MultiWriter
     builder.target(Target::Pipe(Box::new(CustomWrite)));
@@ -102,7 +189,7 @@ pub fn setup_logger() -> io::Result<()> {
         }
     }));
 
-    info!("Logger initialized with output to file and stdout");
+    info!("Logger initialized");
     Ok(())
 }
 

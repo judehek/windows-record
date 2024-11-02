@@ -1,3 +1,5 @@
+use crate::logger::LoggerConfig;
+
 #[derive(Clone)]
 pub struct RecorderConfig {
     fps_num: u32,
@@ -5,6 +7,7 @@ pub struct RecorderConfig {
     screen_width: u32,
     screen_height: u32,
     capture_audio: bool,
+    log_config: Option<LoggerConfig>,
 }
 
 impl RecorderConfig {
@@ -15,10 +18,17 @@ impl RecorderConfig {
             screen_width,
             screen_height,
             capture_audio: true,
+            log_config: Some(LoggerConfig::default()),
         }
     }
 
-    pub fn update(&mut self, fps_den: Option<u32>, fps_num: Option<u32>, screen_width: Option<u32>, screen_height: Option<u32>) {
+    pub fn update(
+        &mut self,
+        fps_den: Option<u32>,
+        fps_num: Option<u32>,
+        screen_width: Option<u32>,
+        screen_height: Option<u32>,
+    ) {
         if let Some(den) = fps_den {
             self.fps_den = den;
         }
@@ -33,13 +43,36 @@ impl RecorderConfig {
         }
     }
 
-    pub fn fps_num(&self) -> u32 { self.fps_num }
-    pub fn fps_den(&self) -> u32 { self.fps_den }
-    pub fn screen_width(&self) -> u32 { self.screen_width }
-    pub fn screen_height(&self) -> u32 { self.screen_height }
-    pub fn capture_audio(&self) -> bool { self.capture_audio }
-    
+    pub fn fps_num(&self) -> u32 {
+        self.fps_num
+    }
+    pub fn fps_den(&self) -> u32 {
+        self.fps_den
+    }
+    pub fn screen_width(&self) -> u32 {
+        self.screen_width
+    }
+    pub fn screen_height(&self) -> u32 {
+        self.screen_height
+    }
+    pub fn capture_audio(&self) -> bool {
+        self.capture_audio
+    }
+
+    // Add this getter method for log_config
+    pub fn log_config(&self) -> Option<LoggerConfig> {
+        self.log_config.clone()
+    }
+
     pub fn set_capture_audio(&mut self, capture_audio: bool) {
         self.capture_audio = capture_audio;
+    }
+
+    pub fn set_log_config(&mut self, config: LoggerConfig) {
+        self.log_config = Some(config);
+    }
+
+    pub fn disable_logging(&mut self) {
+        self.log_config = None;
     }
 }

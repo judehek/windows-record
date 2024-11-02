@@ -2,16 +2,23 @@ use log::info;
 use std::{env, io, time::Duration};
 use win_recorder::{Recorder, Result};
 
-fn main() -> io::Result<()> {
+fn main() -> Result<()> {
     env::set_var("RUST_BACKTRACE", "full");
-    win_recorder::logger::setup_logger()?;
 
-    // Log system information
+    // create recorder with default logging enabled
+    let rec = Recorder::new(30, 1, 1920, 1080)?;
+
+    // optionally disable logging
+    // rec.disable_logging()?;
+
+    // or set a custom log directory
+    // rec.set_log_directory("./logs")?;
+
+    // log system information (these will only show if logging is enabled)
     info!("OS: {}", env::consts::OS);
     info!("Architecture: {}", env::consts::ARCH);
     info!("Application started");
 
-    let rec = Recorder::new(30, 1, 1920, 1080);
     rec.set_process_name("League of Legends");
     info!("Set process name to League of Legends");
 
@@ -33,7 +40,6 @@ fn main() -> io::Result<()> {
         Ok(_) => info!("Recording started successfully"),
         Err(e) => log::error!("Failed to start recording: {:?}", e),
     }
-    println!("{:?}", res);
 
     std::thread::sleep(Duration::from_secs(10));
     info!("Stopping recording");
@@ -43,7 +49,6 @@ fn main() -> io::Result<()> {
         Ok(_) => info!("Recording stopped successfully"),
         Err(e) => log::error!("Failed to stop recording: {:?}", e),
     }
-    println!("{:?}", res2);
 
     info!("Application finished");
     Ok(())

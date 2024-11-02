@@ -1,33 +1,49 @@
 mod config;
 mod inner;
 
-use std::cell::RefCell;
-use crate::error::{Result, RecorderError};
 use self::config::RecorderConfig;
 use self::inner::RecorderInner;
+use crate::error::{RecorderError, Result};
+use crate::logger::{setup_logger, LoggerConfig}; // Add this import
 use log::info;
+use std::cell::RefCell;
+use std::io;
+use std::path::Path; // Add this import // Add this import
 
 pub struct Recorder {
     rec_inner: RefCell<Option<RecorderInner>>,
     config: RefCell<RecorderConfig>,
-    process_name: RefCell<Option<String>>
+    process_name: RefCell<Option<String>>,
 }
 
 impl Recorder {
-    pub fn new(fps_num: u32, fps_den: u32, screen_width: u32, screen_height: u32) -> Self {
-        Self {
+    pub fn new(fps_num: u32, fps_den: u32, screen_width: u32, screen_height: u32) -> Result<Self> {
+        let recorder = Self {
             rec_inner: RefCell::new(None),
             config: RefCell::new(RecorderConfig::new(
                 fps_num,
-                fps_den, 
+                fps_den,
                 screen_width,
-                screen_height
+                screen_height,
             )),
-            process_name: RefCell::new(None)
+            process_name: RefCell::new(None),
+        };
+
+        // Initialize logger with default configuration
+        if let Some(log_config) = recorder.config.borrow().log_config() {
+            setup_logger(log_config).map_err(|e| RecorderError::LoggerError(e.to_string()))?;
         }
+
+        Ok(recorder)
     }
 
-    pub fn set_configs(&self, fps_den: Option<u32>, fps_num: Option<u32>, screen_width: Option<u32>, screen_height: Option<u32>) {
+    pub fn set_configs(
+        &self,
+        fps_den: Option<u32>,
+        fps_num: Option<u32>,
+        screen_width: Option<u32>,
+        screen_height: Option<u32>,
+    ) {
         let mut config = self.config.borrow_mut();
         config.update(fps_den, fps_num, screen_width, screen_height);
     }
@@ -45,13 +61,12 @@ impl Recorder {
         let Some(ref proc_name) = *process_name else {
             return Err(RecorderError::NoProcessSpecified);
         };
-    
-        *rec_inner = Some(RecorderInner::init(
-            filename,
-            &config,
-            proc_name,
-        ).map_err(|e| RecorderError::FailedToStart(e.to_string()))?);
-        
+
+        *rec_inner = Some(
+            RecorderInner::init(filename, &config, proc_name)
+                .map_err(|e| RecorderError::FailedToStart(e.to_string()))?,
+        );
+
         Ok(())
     }
 
@@ -72,5 +87,23 @@ impl Recorder {
 
     pub fn is_audio_capture_enabled(&self) -> bool {
         self.config.borrow().capture_audio()
+    }
+
+    // Logger configuration methods
+    pub fn set_log_directory<P: AsRef<Path>>(&self, dir: P) -> Result<()> {
+        let mut config = self.config.borrow_mut();
+        let log_config = LoggerConfig::default().with_log_dir(dir);
+        setup_logger(log_config.clone()).map_err(|e| RecorderError::LoggerError(e.to_string()))?;
+        config.set_log_config(log_config);
+        Ok(())
+    }
+
+    pub fn disable_logging(&self) -> Result<()> {
+        let mut config = self.config.borrow_mut();
+        config.disable_logging();
+        // Re-initialize logger with disabled configuration
+        setup_logger(LoggerConfig::default().disable_logging())
+            .map_err(|e| RecorderError::LoggerError(e.to_string()))?;
+        Ok(())
     }
 }

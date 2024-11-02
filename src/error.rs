@@ -28,6 +28,9 @@ pub enum RecorderError {
 
     #[error("No Process Specified for the Recorder")]
     NoProcessSpecified,
+
+    #[error("Logger error: {0}")]
+    LoggerError(String),
 }
 
 impl From<RecorderError> for WindowsError {
