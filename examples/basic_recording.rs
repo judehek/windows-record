@@ -1,19 +1,10 @@
-use crate::error::Result;
-use crate::logger::setup_logger;
-use crate::recorder::Recorder;
 use log::info;
 use std::{env, io, time::Duration};
-
-mod capture;
-mod error;
-mod logger;
-mod processing;
-mod recorder;
-mod types;
+use win_recorder::{Recorder, Result};
 
 fn main() -> io::Result<()> {
     env::set_var("RUST_BACKTRACE", "full");
-    setup_logger()?;
+    win_recorder::logger::setup_logger()?;
 
     // Log system information
     info!("OS: {}", env::consts::OS);
