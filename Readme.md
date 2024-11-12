@@ -6,7 +6,7 @@ This is a window recorder built using the `windows` crate in Rust. It uses deskt
 
 ## Features
 
-- Recording a window with audio (Up to 60fps tested).
+- Recording a window with audio (up to 60 fps tested)
 - H.264 Codec output supporting MP4 files
 - Abstracted interface that leaves all difficult and `unsafe` code away from a user
 
