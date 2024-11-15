@@ -75,12 +75,26 @@ pub unsafe fn collect_audio(
     proc_id: u32,
     started: Arc<Barrier>,
 ) -> Result<()> {
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    // Validate thread priority setting
+    let priority_result = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    if priority_result.as_bool() == false {
+        info!("Failed to set thread priority: {}", GetLastError().0);
+    }
 
-    // Get QPC frequency at the start
+    // Get and validate QPC frequency
     let mut qpc_freq = 0;
-    QueryPerformanceFrequency(&mut qpc_freq);
-    let ticks_to_hns = 10000000.0 / qpc_freq as f64; // Convert QPC ticks to 100ns units
+    if !QueryPerformanceFrequency(&mut qpc_freq).as_bool() {
+        return Err(E_FAIL.into());
+    }
+    if qpc_freq <= 0 {
+        info!("Invalid QPC frequency: {}", qpc_freq);
+        return Err(E_FAIL.into());
+    }
+    let ticks_to_hns = 10000000.0 / qpc_freq as f64;
+    info!(
+        "QPC frequency: {}, ticks_to_hns: {}",
+        qpc_freq, ticks_to_hns
+    );
 
     let wave_format = WAVEFORMATEX {
         wFormatTag: WAVE_FORMAT_PCM.try_into().unwrap(),
@@ -92,63 +106,150 @@ pub unsafe fn collect_audio(
         cbSize: 0,
     };
 
-    let audio_client = setup_audio_client(proc_id, &wave_format)?;
-    let capture_client: IAudioCaptureClient = audio_client.GetService()?;
+    let audio_client = match setup_audio_client(proc_id, &wave_format) {
+        Ok(client) => client,
+        Err(e) => {
+            info!("Failed to setup audio client: {:?}", e);
+            return Err(e);
+        }
+    };
+
+    let capture_client: IAudioCaptureClient = match audio_client.GetService() {
+        Ok(client) => client,
+        Err(e) => {
+            info!("Failed to get capture client: {:?}", e);
+            return Err(e);
+        }
+    };
 
     let packet_duration =
         std::time::Duration::from_nanos((1000000000.0 / wave_format.nSamplesPerSec as f64) as u64);
     let packet_duration_hns = packet_duration.as_nanos() as i64 / 100;
 
-    // Get initial QPC value for relative timing
+    // Get and validate initial QPC value
     let mut start_qpc_i64: i64 = 0;
-    QueryPerformanceCounter(&mut start_qpc_i64);
+    if !QueryPerformanceCounter(&mut start_qpc_i64).as_bool() {
+        info!("Failed to get initial QPC value");
+        return Err(E_FAIL.into());
+    }
+    if start_qpc_i64 <= 0 {
+        info!("Invalid initial QPC value: {}", start_qpc_i64);
+        return Err(E_FAIL.into());
+    }
     let start_qpc = start_qpc_i64 as u64;
+    info!("Initial QPC value: {}", start_qpc);
 
-    audio_client.Start()?;
+    // Track timing statistics
+    let mut last_packet_time = start_qpc;
+    let mut zero_packet_count = 0;
+    let mut total_packets = 0;
+
+    match audio_client.Start() {
+        Ok(_) => info!("Audio client started successfully"),
+        Err(e) => {
+            info!("Failed to start audio client: {:?}", e);
+            return Err(e);
+        }
+    }
+
     started.wait();
 
     while recording.load(Ordering::Relaxed) {
-        let next_packet_size = capture_client.GetNextPacketSize()?;
+        let next_packet_size = match capture_client.GetNextPacketSize() {
+            Ok(size) => size,
+            Err(e) => {
+                info!("Failed to get next packet size: {:?}", e);
+                return Err(e);
+            }
+        };
 
         if next_packet_size > 0 {
+            total_packets += 1;
+            zero_packet_count = 0; // Reset counter when we get data
+
             let mut buffer = ptr::null_mut();
             let mut num_frames_available = 0;
             let mut flags = 0;
             let mut device_position = 0;
             let mut qpc_position: u64 = 0;
 
-            capture_client.GetBuffer(
+            match capture_client.GetBuffer(
                 &mut buffer,
                 &mut num_frames_available,
                 &mut flags,
                 Some(&mut device_position),
-                Some(&mut qpc_position as *mut u64), // Pass as raw pointer
-            )?;
+                Some(&mut qpc_position as *mut u64),
+            ) {
+                Ok(_) => {
+                    // Validate QPC timing
+                    if qpc_position <= last_packet_time {
+                        info!(
+                            "QPC time went backwards: current={}, last={}",
+                            qpc_position, last_packet_time
+                        );
+                    }
+                    last_packet_time = qpc_position;
 
-            if (flags & (AUDCLNT_BUFFERFLAGS_SILENT.0 as u32)) == 0 {
-                // Convert QPC time to 100ns units relative to start
-                let relative_qpc = qpc_position - start_qpc;
-                let time_hns = (relative_qpc as f64 * ticks_to_hns) as i64;
+                    if (flags & (AUDCLNT_BUFFERFLAGS_SILENT.0 as u32)) == 0 {
+                        let relative_qpc = qpc_position - start_qpc;
+                        let time_hns = (relative_qpc as f64 * ticks_to_hns) as i64;
 
-                let sample = create_audio_sample(
-                    buffer,
-                    num_frames_available,
-                    &wave_format,
-                    time_hns, // Now passing converted time in 100ns units
-                    packet_duration_hns,
-                )?;
+                        match create_audio_sample(
+                            buffer,
+                            num_frames_available,
+                            &wave_format,
+                            time_hns,
+                            packet_duration_hns,
+                        ) {
+                            Ok(sample) => {
+                                if let Err(e) = send.send(SendableSample(Arc::new(sample))) {
+                                    info!("Failed to send audio sample: {:?}", e);
+                                    return Err(E_FAIL.into());
+                                }
+                            }
+                            Err(e) => {
+                                info!("Failed to create audio sample: {:?}", e);
+                                return Err(e);
+                            }
+                        }
+                    }
 
-                send.send(SendableSample(Arc::new(sample)))
-                    .expect("Failed to send audio sample");
+                    match capture_client.ReleaseBuffer(num_frames_available) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            info!("Failed to release buffer: {:?}", e);
+                            return Err(e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    info!("Failed to get buffer: {:?}", e);
+                    return Err(e);
+                }
             }
-
-            capture_client.ReleaseBuffer(num_frames_available)?;
         } else {
+            zero_packet_count += 1;
+            if zero_packet_count >= 1000 {
+                // Log every ~1 second of no data
+                info!(
+                    "No audio data received for {} consecutive checks",
+                    zero_packet_count
+                );
+                zero_packet_count = 0; // Reset to avoid spam
+            }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
 
-    audio_client.Stop()?;
+    info!(
+        "Recording stopped. Total packets processed: {}",
+        total_packets
+    );
+    match audio_client.Stop() {
+        Ok(_) => info!("Audio client stopped successfully"),
+        Err(e) => info!("Error stopping audio client: {:?}", e),
+    }
+
     Ok(())
 }
 
@@ -216,7 +317,7 @@ unsafe fn create_audio_sample(
     buffer: *mut u8,
     num_frames: u32,
     wave_format: &WAVEFORMATEX,
-    time_hns: i64, // Changed to i64 since we're now passing 100ns units directly
+    time_hns: i64,
     packet_duration_hns: i64,
 ) -> Result<IMFSample> {
     let buffer_size = num_frames as usize * wave_format.nBlockAlign as usize;
