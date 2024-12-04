@@ -11,22 +11,22 @@ pub enum RecorderError {
     #[error("Windows API error: {0}")]
     Windows(#[from] core::Error),
 
-    #[error("Generic Error: {0}")]
+    #[error("Generic error: {0}")]
     Generic(String),
 
-    #[error("Failed to Start the Recording Process, reason: {0}")]
+    #[error("Failed to start the recording process, reason: {0}")]
     FailedToStart(String),
 
-    #[error("Failed to Stop the Recording Process")]
+    #[error("Failed to stop the recording process")]
     FailedToStop,
 
-    #[error("Called to Stop when there is no Recorder Configured")]
+    #[error("Called to stop when there is no recorder configured")]
     NoRecorderBound,
 
-    #[error("Called to Stop when the Recorder is Already Stopped")]
+    #[error("Called to stop when the recorder is already stopped")]
     RecorderAlreadyStopped,
 
-    #[error("No Process Specified for the Recorder")]
+    #[error("No process specified for the recorder")]
     NoProcessSpecified,
 
     #[error("Logger error: {0}")]
