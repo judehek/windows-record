@@ -13,6 +13,7 @@ pub unsafe fn create_sink_writer(
     s_width: u32,
     s_height: u32,
     capture_audio: bool,
+    capture_microphone: bool,
 ) -> Result<IMFSinkWriter> {
     // Create and configure attributes
     let attributes = create_sink_attributes()?;
@@ -24,12 +25,17 @@ pub unsafe fn create_sink_writer(
         attributes.as_ref(),
     )?;
 
-    // Configure video stream
+    // Configure video stream (stream index 0)
     configure_video_stream(&sink_writer, fps_num, fps_den, s_width, s_height)?;
 
-    // Configure audio stream if needed
+    // Configure process audio stream if needed (stream index 1)
     if capture_audio {
-        configure_audio_stream(&sink_writer)?;
+        configure_audio_stream(&sink_writer, 1)?;
+    }
+
+    // Configure microphone stream if needed (stream index 2)
+    if capture_microphone {
+        configure_audio_stream(&sink_writer, 2)?;
     }
 
     Ok(sink_writer)
@@ -63,9 +69,23 @@ unsafe fn configure_video_stream(
     // Configure encoder
     let config_attrs = create_encoder_config()?;
 
-    // Add stream and set input type
-    let stream_index = sink_writer.AddStream(&video_output_type)?;
-    sink_writer.SetInputMediaType(stream_index, &video_input_type, config_attrs.as_ref())?;
+    // First add stream, then set input type
+    sink_writer.AddStream(&video_output_type)?;
+    sink_writer.SetInputMediaType(0, &video_input_type, config_attrs.as_ref())?;
+
+    Ok(())
+}
+
+unsafe fn configure_audio_stream(sink_writer: &IMFSinkWriter, stream_index: u32) -> Result<()> {
+    // Create output type
+    let audio_output_type = create_audio_output_type()?;
+
+    // Create input type
+    let audio_input_type = create_audio_input_type()?;
+
+    // First add stream, then set input type
+    sink_writer.AddStream(&audio_output_type)?;
+    sink_writer.SetInputMediaType(stream_index, &audio_input_type, None)?;
 
     Ok(())
 }
@@ -135,20 +155,6 @@ unsafe fn create_encoder_config() -> Result<Option<IMFAttributes>> {
     }
 
     Ok(config_attrs)
-}
-
-unsafe fn configure_audio_stream(sink_writer: &IMFSinkWriter) -> Result<()> {
-    // Create output type
-    let audio_output_type = create_audio_output_type()?;
-
-    // Create input type
-    let audio_input_type = create_audio_input_type()?;
-
-    // Add stream and set input type
-    let stream_index = sink_writer.AddStream(&audio_output_type)?;
-    sink_writer.SetInputMediaType(stream_index, &audio_input_type, None)?;
-
-    Ok(())
 }
 
 unsafe fn create_audio_output_type() -> Result<IMFMediaType> {

@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 
 use super::config::RecorderConfig;
-use crate::capture::{collect_audio, collect_frames, find_window_by_substring};
+use crate::capture::{collect_audio, collect_frames, collect_microphone, find_window_by_substring};
 use crate::error::RecorderError;
 use crate::processing::{media, process_samples};
 use crate::types::{SendableSample, SendableWriter};
@@ -20,6 +20,7 @@ pub struct RecorderInner {
     collect_video_handle: RefCell<Option<JoinHandle<Result<()>>>>,
     process_handle: RefCell<Option<JoinHandle<Result<()>>>>,
     collect_audio_handle: RefCell<Option<JoinHandle<Result<()>>>>,
+    collect_microphone_handle: RefCell<Option<JoinHandle<Result<()>>>>,
 }
 
 impl RecorderInner {
@@ -32,17 +33,19 @@ impl RecorderInner {
         let screen_width = config.screen_width();
         let screen_height = config.screen_height();
         let capture_audio = config.capture_audio();
+        let capture_microphone = config.capture_microphone();
 
         let recording = Arc::new(AtomicBool::new(true));
         let mut collect_video_handle: Option<JoinHandle<Result<()>>> = None;
         let mut process_handle: Option<JoinHandle<Result<()>>> = None;
         let mut collect_audio_handle: Option<JoinHandle<Result<()>>> = None;
+        let mut collect_microphone_handle: Option<JoinHandle<Result<()>>> = None;
 
         unsafe {
             // Initialize Media Foundation
             media::init_media_foundation()?;
 
-            // Create and configure media sink using the cloned values
+            // Create and configure media sink
             let media_sink = media::create_sink_writer(
                 filename,
                 fps_num,
@@ -50,11 +53,12 @@ impl RecorderInner {
                 screen_width,
                 screen_height,
                 capture_audio,
+                capture_microphone,
             )?;
 
             // Find target window
             let hwnd = find_window_by_substring(process_name)
-                .ok_or_else(|| RecorderError::FailedToStart("No Window Found".to_string()))?;
+                .ok_or_else(|| RecorderError::FailedToStart("No window found".to_string()))?;
 
             // Get the process ID
             let mut process_id: u32 = 0;
@@ -71,6 +75,7 @@ impl RecorderInner {
             // Set up channels
             let (sender_video, receiver_video) = channel::<SendableSample>();
             let (sender_audio, receiver_audio) = channel::<SendableSample>();
+            let (sender_microphone, receiver_microphone) = channel::<SendableSample>(); // Moved outside if block
 
             // Create D3D11 device and context
             let (device, context) = create_d3d11_device()?;
@@ -78,9 +83,11 @@ impl RecorderInner {
             let context_mutex = Arc::new(std::sync::Mutex::new(context));
 
             // Set up synchronization barrier
-            let barrier = Arc::new(Barrier::new(if capture_audio { 2 } else { 1 }));
+            let barrier = Arc::new(Barrier::new(
+                if capture_audio { 1 } else { 0 } + if capture_microphone { 1 } else { 0 } + 1,
+            ));
 
-            // Start video capture thread with cloned values
+            // Start video capture thread
             let rec_clone = recording.clone();
             let dev_clone = device.clone();
             let barrier_clone = barrier.clone();
@@ -108,18 +115,29 @@ impl RecorderInner {
                 }));
             }
 
-            // Start processing thread with cloned values
+            // Start microphone capture thread if enabled
+            if capture_microphone {
+                let rec_clone = recording.clone();
+                let barrier_clone = barrier.clone();
+                collect_microphone_handle = Some(std::thread::spawn(move || {
+                    collect_microphone(sender_microphone, rec_clone, barrier_clone)
+                }));
+            }
+
+            // Start processing thread
             let rec_clone = recording.clone();
             process_handle = Some(std::thread::spawn(move || {
                 process_samples(
                     sendable_sink,
                     receiver_video,
                     receiver_audio,
+                    receiver_microphone,
                     rec_clone,
                     screen_width,
                     screen_height,
                     device,
                     capture_audio,
+                    capture_microphone,
                 )
             }));
         }
@@ -130,6 +148,7 @@ impl RecorderInner {
             collect_video_handle: RefCell::new(collect_video_handle),
             process_handle: RefCell::new(process_handle),
             collect_audio_handle: RefCell::new(collect_audio_handle),
+            collect_microphone_handle: RefCell::new(collect_microphone_handle),
         })
     }
 
@@ -145,6 +164,10 @@ impl RecorderInner {
         let handles = [
             ("Frame", self.collect_video_handle.borrow_mut().take()),
             ("Audio", self.collect_audio_handle.borrow_mut().take()),
+            (
+                "Microphone",
+                self.collect_microphone_handle.borrow_mut().take(),
+            ),
             ("Process", self.process_handle.borrow_mut().take()),
         ];
 
@@ -152,7 +175,7 @@ impl RecorderInner {
             if let Some(handle) = handle {
                 if let Err(e) = handle
                     .join()
-                    .map_err(|_| RecorderError::Generic(format!("{} Handle Join Failed", name)))?
+                    .map_err(|_| RecorderError::Generic(format!("{} Handle join failed", name)))?
                 {
                     error!("{} thread error: {:?}", name, e);
                 }

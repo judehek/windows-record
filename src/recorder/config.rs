@@ -7,6 +7,7 @@ pub struct RecorderConfig {
     screen_width: u32,
     screen_height: u32,
     capture_audio: bool,
+    capture_microphone: bool,
     log_config: Option<LoggerConfig>,
 }
 
@@ -18,6 +19,7 @@ impl RecorderConfig {
             screen_width,
             screen_height,
             capture_audio: true,
+            capture_microphone: false,
             log_config: Some(LoggerConfig::default()),
         }
     }
@@ -58,6 +60,9 @@ impl RecorderConfig {
     pub fn capture_audio(&self) -> bool {
         self.capture_audio
     }
+    pub fn capture_microphone(&self) -> bool {
+        self.capture_microphone
+    }
 
     // Add this getter method for log_config
     pub fn log_config(&self) -> Option<LoggerConfig> {
@@ -66,6 +71,10 @@ impl RecorderConfig {
 
     pub fn set_capture_audio(&mut self, capture_audio: bool) {
         self.capture_audio = capture_audio;
+    }
+
+    pub fn set_capture_microphone(&mut self, capture_microphone: bool) {
+        self.capture_microphone = capture_microphone;
     }
 
     pub fn set_log_config(&mut self, config: LoggerConfig) {

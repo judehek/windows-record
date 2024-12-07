@@ -32,6 +32,8 @@ fn main() -> Result<()> {
         }
     );
 
+    rec.set_capture_microphone(true);
+
     std::thread::sleep(Duration::from_secs(3));
     info!("Starting recording");
 

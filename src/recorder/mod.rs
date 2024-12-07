@@ -80,6 +80,12 @@ impl Recorder {
         self.config.borrow_mut().set_capture_audio(capture_audio);
     }
 
+    pub fn set_capture_microphone(&self, capture_microphone: bool) {
+        self.config
+            .borrow_mut()
+            .set_capture_microphone(capture_microphone);
+    }
+
     pub fn is_audio_capture_enabled(&self) -> bool {
         self.config.borrow().capture_audio()
     }
