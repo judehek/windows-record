@@ -37,6 +37,11 @@ features = [
     "Win32_Storage_Xps",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Performance",
+    "Win32_Devices",
+    "Win32_Devices_Properties",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Com",
+    "Win32_Devices_FunctionDiscovery",
     "implement"
 ]
 
