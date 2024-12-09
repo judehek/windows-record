@@ -313,7 +313,7 @@ unsafe fn get_audio_buffer(capture_client: &IAudioCaptureClient) -> Result<(*mut
     Ok((buffer, num_frames_available, flags))
 }
 
-pub(crate) unsafe fn create_audio_sample(
+unsafe fn create_audio_sample(
     buffer: *mut u8,
     num_frames: u32,
     wave_format: &WAVEFORMATEX,

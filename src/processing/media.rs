@@ -25,17 +25,22 @@ pub unsafe fn create_sink_writer(
         attributes.as_ref(),
     )?;
 
-    // Configure video stream (stream index 0)
-    configure_video_stream(&sink_writer, fps_num, fps_den, s_width, s_height)?;
+    let mut current_stream_index = 0;
 
-    // Configure process audio stream if needed (stream index 1)
+    // Configure video stream (always stream index 0)
+    configure_video_stream(&sink_writer, fps_num, fps_den, s_width, s_height)?;
+    current_stream_index += 1;
+
+    // Configure process audio stream
     if capture_audio {
-        configure_audio_stream(&sink_writer, 1)?;
+        configure_audio_stream(&sink_writer, current_stream_index)?;
+        current_stream_index += 1;
     }
 
-    // Configure microphone stream if needed (stream index 2)
+    // Configure microphone stream
     if capture_microphone {
-        configure_audio_stream(&sink_writer, 2)?;
+        configure_audio_stream(&sink_writer, current_stream_index)?;
+        // current_stream_index += 1; // Only needed if we more streams after this
     }
 
     Ok(sink_writer)
