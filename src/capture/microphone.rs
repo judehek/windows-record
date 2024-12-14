@@ -8,7 +8,6 @@ use windows::core::{implement, IUnknown};
 use windows::core::{ComInterface, Result};
 use windows::Win32::Foundation::*;
 use windows::Win32::Media::Audio::*;
-use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::*;
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::*;
@@ -80,8 +79,8 @@ pub unsafe fn collect_microphone(
         wFormatTag: WAVE_FORMAT_PCM.try_into().unwrap(),
         nChannels: 2,
         nSamplesPerSec: 44100,
-        nAvgBytesPerSec: 176400,
-        nBlockAlign: 4,
+        nAvgBytesPerSec: 44100 * 2 * 2, // samples/sec * channels * bytes_per_sample
+        nBlockAlign: 4,                 // channels * bytes_per_sample
         wBitsPerSample: 16,
         cbSize: 0,
     };
@@ -238,7 +237,6 @@ unsafe fn setup_microphone_client(wave_format: &WAVEFORMATEX) -> Result<IAudioCl
     match coinit_result {
         Ok(_) => info!("COM initialized successfully"),
         Err(e) => {
-            // Don't fail on CO_E_ALREADYINITIALIZED
             if e.code() != CO_E_ALREADYINITIALIZED {
                 return Err(e);
             }
@@ -246,15 +244,6 @@ unsafe fn setup_microphone_client(wave_format: &WAVEFORMATEX) -> Result<IAudioCl
         }
     }
 
-    // Initialize Media Foundation
-    let mf_result = MFStartup(MF_VERSION, MFSTARTUP_FULL);
-    if let Err(e) = mf_result {
-        info!("Media Foundation initialization failed: {:?}", e);
-        return Err(e);
-    }
-    info!("Media Foundation initialized successfully");
-
-    // Create device enumerator with explicit error handling
     info!("Creating device enumerator...");
     let enumerator: IMMDeviceEnumerator =
         match CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) {
@@ -266,7 +255,7 @@ unsafe fn setup_microphone_client(wave_format: &WAVEFORMATEX) -> Result<IAudioCl
         };
     info!("Device enumerator created");
 
-    // Get default audio endpoint with explicit error handling
+    // Get default audio endpoint
     info!("Getting default audio endpoint...");
     let device = match enumerator.GetDefaultAudioEndpoint(eCapture, eConsole) {
         Ok(dev) => dev,
@@ -289,7 +278,7 @@ unsafe fn setup_microphone_client(wave_format: &WAVEFORMATEX) -> Result<IAudioCl
     }
     info!("Callback registered");
 
-    // Activate audio client with explicit error handling
+    // Activate audio client
     info!("Activating audio client...");
     let audio_client: IAudioClient = match device.Activate(CLSCTX_ALL, None) {
         Ok(client) => client,
@@ -300,13 +289,18 @@ unsafe fn setup_microphone_client(wave_format: &WAVEFORMATEX) -> Result<IAudioCl
     };
     info!("Audio client activated");
 
-    // Get device period with explicit error handling
+    // Get mix format
+    let mix_format_ptr = audio_client.GetMixFormat()?;
+    info!("Got mix format");
+
+    // Get device period
     info!("Getting device period...");
     let mut default_period = 0;
     let mut minimum_period = 0;
     if let Err(e) =
         audio_client.GetDevicePeriod(Some(&mut default_period), Some(&mut minimum_period))
     {
+        CoTaskMemFree(Some(mix_format_ptr as *mut _));
         info!("Failed to get device period: {:?}", e);
         return Err(e);
     }
@@ -315,17 +309,19 @@ unsafe fn setup_microphone_client(wave_format: &WAVEFORMATEX) -> Result<IAudioCl
         default_period, minimum_period
     );
 
-    // Initialize audio client with proper flags and buffer duration
+    // Initialize audio client
     info!("Initializing audio client...");
     let init_result = audio_client.Initialize(
         AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK, // Add event callback flag
-        default_period * 2,                // Double the buffer duration for safety
+        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, // Removed LOOPBACK
+        default_period * 2,
         0,
-        wave_format,
+        mix_format_ptr,
         None,
     );
-    info!("fdgfdgf");
+
+    // Free the mix format
+    CoTaskMemFree(Some(mix_format_ptr as *mut _));
 
     match init_result {
         Ok(_) => {
@@ -354,7 +350,7 @@ unsafe fn create_microphone_sample(
     wave_format: &WAVEFORMATEX,
     time_hns: i64,
     packet_duration_hns: i64,
-) -> Result<IMFSample> {
+) -> Result<Vec<u8>> {
     // Add validation
     info!("checking if buffer is null");
     if buffer.is_null() {
@@ -378,26 +374,5 @@ unsafe fn create_microphone_sample(
     }
 
     let audio_data = std::slice::from_raw_parts(buffer, buffer_size);
-
-    let sample: IMFSample = MFCreateSample()?;
-    let media_buffer: IMFMediaBuffer = MFCreateMemoryBuffer(buffer_size as u32)?;
-
-    let mut buffer_ptr: *mut u8 = ptr::null_mut();
-    let mut max_length = 0;
-    let mut current_length = 0;
-
-    media_buffer.Lock(
-        &mut buffer_ptr,
-        Some(&mut max_length),
-        Some(&mut current_length),
-    )?;
-    ptr::copy_nonoverlapping(audio_data.as_ptr(), buffer_ptr, buffer_size);
-    media_buffer.SetCurrentLength(buffer_size as u32)?;
-    media_buffer.Unlock()?;
-
-    sample.AddBuffer(&media_buffer)?;
-    sample.SetSampleTime(time_hns)?;
-    sample.SetSampleDuration(num_frames as i64 * packet_duration_hns)?;
-
-    Ok(sample)
+    Ok(audio_data.to_vec())
 }
