@@ -33,13 +33,13 @@ pub unsafe fn create_sink_writer(
 
     // Configure process audio stream
     if capture_audio {
-        configure_audio_stream(&sink_writer, current_stream_index)?;
+        configure_audio_stream(&sink_writer, current_stream_index, false)?;
         current_stream_index += 1;
     }
 
     // Configure microphone stream
     if capture_microphone {
-        configure_audio_stream(&sink_writer, current_stream_index)?;
+        configure_audio_stream(&sink_writer, current_stream_index, true)?;
         // current_stream_index += 1; // Only needed if we more streams after this
     }
 
@@ -81,12 +81,20 @@ unsafe fn configure_video_stream(
     Ok(())
 }
 
-unsafe fn configure_audio_stream(sink_writer: &IMFSinkWriter, stream_index: u32) -> Result<()> {
-    // Create output type
+unsafe fn configure_audio_stream(
+    sink_writer: &IMFSinkWriter,
+    stream_index: u32,
+    is_microphone: bool,
+) -> Result<()> {
+    // Create output type (same for both)
     let audio_output_type = create_audio_output_type()?;
 
-    // Create input type
-    let audio_input_type = create_audio_input_type()?;
+    // Create appropriate input type based on source
+    let audio_input_type = if is_microphone {
+        create_microphone_input_type()?
+    } else {
+        create_system_audio_input_type()?
+    };
 
     // First add stream, then set input type
     sink_writer.AddStream(&audio_output_type)?;
@@ -174,7 +182,7 @@ unsafe fn create_audio_output_type() -> Result<IMFMediaType> {
     Ok(output_type)
 }
 
-unsafe fn create_audio_input_type() -> Result<IMFMediaType> {
+unsafe fn create_system_audio_input_type() -> Result<IMFMediaType> {
     let input_type: IMFMediaType = MFCreateMediaType()?;
     let wav_format = windows::Win32::Media::Audio::WAVEFORMATEX {
         wFormatTag: windows::Win32::Media::Audio::WAVE_FORMAT_PCM
@@ -185,6 +193,29 @@ unsafe fn create_audio_input_type() -> Result<IMFMediaType> {
         nAvgBytesPerSec: 176400,
         nBlockAlign: 4,
         wBitsPerSample: 16,
+        cbSize: 0,
+    };
+
+    MFInitMediaTypeFromWaveFormatEx(
+        &input_type,
+        &wav_format,
+        std::mem::size_of::<windows::Win32::Media::Audio::WAVEFORMATEX>()
+            .try_into()
+            .unwrap(),
+    )?;
+
+    Ok(input_type)
+}
+
+unsafe fn create_microphone_input_type() -> Result<IMFMediaType> {
+    let input_type: IMFMediaType = MFCreateMediaType()?;
+    let wav_format = windows::Win32::Media::Audio::WAVEFORMATEX {
+        wFormatTag: 3u16,        // WAVE_FORMAT_IEEE_FLOAT = 3
+        nChannels: 1,            // Mono from microphone
+        nSamplesPerSec: 48000,   // Microphone sample rate
+        nAvgBytesPerSec: 192000, // 48000 * 4 bytes * 1 channel
+        nBlockAlign: 4,          // 32 bits = 4 bytes per sample
+        wBitsPerSample: 32,      // 32-bit float
         cbSize: 0,
     };
 

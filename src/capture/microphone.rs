@@ -90,6 +90,20 @@ pub unsafe fn collect_microphone(
     // Get the device's mix format
     let mix_format_ptr = microphone_client.GetMixFormat()?;
     let wave_format = *mix_format_ptr;
+    let format_tag = wave_format.wFormatTag;
+    let channels = wave_format.nChannels;
+    let samples_per_sec = wave_format.nSamplesPerSec;
+    let bits_per_sample = wave_format.wBitsPerSample;
+    let block_align = wave_format.nBlockAlign;
+    let avg_bytes_per_sec = wave_format.nAvgBytesPerSec;
+
+    info!("Mix Format:");
+    info!("  Format Tag: {}", format_tag);
+    info!("  Channels: {}", channels);
+    info!("  Samples Per Second: {} Hz", samples_per_sec);
+    info!("  Bits Per Sample: {}", bits_per_sample);
+    info!("  Block Align: {}", block_align);
+    info!("  Average Bytes Per Second: {}", avg_bytes_per_sec);
 
     let capture_client: IAudioCaptureClient = match microphone_client.GetService() {
         Ok(client) => client,
@@ -323,20 +337,19 @@ unsafe fn create_microphone_sample(
     time_hns: i64,
     packet_duration_hns: i64,
 ) -> Result<IMFSample> {
-    // Validate inputs
     if buffer.is_null() {
         return Err(E_POINTER.into());
     }
 
-    let buffer_size = num_frames as usize * wave_format.nBlockAlign as usize;
+    let bytes_per_sample = wave_format.wBitsPerSample as usize / 8;
+    let num_channels = wave_format.nChannels as usize;
+    let block_align = wave_format.nBlockAlign as usize;
 
-    // Create the IMFSample
+    let buffer_size = num_frames as usize * block_align;
+
     let sample: IMFSample = MFCreateSample()?.into();
-
-    // Create media buffer
     let media_buffer: IMFMediaBuffer = MFCreateMemoryBuffer(buffer_size as u32)?.into();
 
-    // Lock the buffer and copy audio data
     let mut buffer_data = std::ptr::null_mut();
     let mut max_length = 0u32;
     let mut current_length = 0u32;
@@ -346,17 +359,60 @@ unsafe fn create_microphone_sample(
         Some(&mut max_length as *mut u32),
         Some(&mut current_length as *mut u32),
     )?;
+    if wave_format.wBitsPerSample == 32 {
+        let src =
+            std::slice::from_raw_parts(buffer as *const f32, num_frames as usize * num_channels);
+        let dst = std::slice::from_raw_parts_mut(
+            buffer_data as *mut f32,
+            num_frames as usize * num_channels,
+        );
 
-    // Safety: we validated buffer isn't null and buffer_size is calculated from valid inputs
-    std::ptr::copy_nonoverlapping(buffer, buffer_data, buffer_size);
+        // Copy the samples
+        std::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len());
+
+        // Optional: Debug log a few samples to verify values
+        if num_frames > 0 {
+            info!(
+                "First few 32-bit samples: {:?}",
+                &src[..std::cmp::min(8, src.len())]
+            );
+        }
+    } else if wave_format.wBitsPerSample == 16 {
+        let src =
+            std::slice::from_raw_parts(buffer as *const i16, num_frames as usize * num_channels);
+        let dst = std::slice::from_raw_parts_mut(
+            buffer_data as *mut i16,
+            num_frames as usize * num_channels,
+        );
+
+        // For stereo, interleave both channels properly
+        if num_channels == 2 {
+            for i in 0..num_frames as usize {
+                for c in 0..num_channels {
+                    dst[i * num_channels + c] = src[i * num_channels + c];
+                }
+            }
+
+            // Debug first few frames
+            if num_frames > 0 {
+                info!(
+                    "First few frames (L/R pairs): {:?}",
+                    &src[..std::cmp::min(8 * num_channels, src.len())]
+                );
+            }
+        } else {
+            // Single channel, straight copy
+            std::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len());
+        }
+    } else {
+        // For non-16-bit formats, fall back to byte copy
+        std::ptr::copy_nonoverlapping(buffer, buffer_data, buffer_size);
+    }
 
     media_buffer.SetCurrentLength(buffer_size as u32)?;
     media_buffer.Unlock()?;
 
-    // Add the buffer to the sample
     sample.AddBuffer(&media_buffer)?;
-
-    // Set the sample time and duration
     sample.SetSampleTime(time_hns)?;
     sample.SetSampleDuration(packet_duration_hns)?;
 

@@ -132,6 +132,29 @@ pub fn process_samples(
                 match rec_microphone.try_recv() {
                     Ok(mic_samp) => {
                         had_work = true;
+                        // Debug: Peek at the sample values
+                        unsafe {
+                            if let Ok(media_buffer) = mic_samp.0.GetBufferByIndex(0) {
+                                let mut buffer = std::ptr::null_mut();
+                                let mut max_length = 0u32;
+                                let mut current_length = 0u32;
+
+                                if let Ok(()) = media_buffer.Lock(
+                                    &mut buffer,
+                                    Some(&mut max_length),
+                                    Some(&mut current_length),
+                                ) {
+                                    // Change to f32 and adjust the length calculation
+                                    let samples = std::slice::from_raw_parts(
+                                        buffer as *const f32,
+                                        std::cmp::min(current_length as usize / 4, 16),
+                                    ); // Divide by 4 for 32-bit samples
+                                    info!("Microphone sample values: {:?}", samples);
+
+                                    let _ = media_buffer.Unlock();
+                                }
+                            }
+                        }
                         let write_start = std::time::Instant::now();
                         unsafe { writer.0.WriteSample(stream_index, &*mic_samp.0)? };
                         debug!("Microphone sample written in {:?}", write_start.elapsed());
