@@ -22,7 +22,7 @@ fn main() -> Result<()> {
     rec.set_process_name("League of Legends");
     info!("Set process name to League of Legends");
 
-    rec.set_capture_audio(false);
+    rec.set_capture_audio(true);
     info!(
         "Audio capture is {}",
         if rec.is_audio_capture_enabled() {

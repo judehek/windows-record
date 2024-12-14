@@ -8,6 +8,9 @@ use windows::core::{implement, IUnknown};
 use windows::core::{ComInterface, Result};
 use windows::Win32::Foundation::*;
 use windows::Win32::Media::Audio::*;
+use windows::Win32::Media::MediaFoundation::{
+    IMFMediaBuffer, IMFSample, MFCreateMemoryBuffer, MFCreateSample,
+};
 use windows::Win32::System::Com::*;
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::*;
@@ -75,33 +78,29 @@ pub unsafe fn collect_microphone(
         qpc_freq, ticks_to_hns
     );
 
-    let wave_format = WAVEFORMATEX {
-        wFormatTag: WAVE_FORMAT_PCM.try_into().unwrap(),
-        nChannels: 2,
-        nSamplesPerSec: 44100,
-        nAvgBytesPerSec: 44100 * 2 * 2, // samples/sec * channels * bytes_per_sample
-        nBlockAlign: 4,                 // channels * bytes_per_sample
-        wBitsPerSample: 16,
-        cbSize: 0,
-    };
-
-    let microphone_client = match setup_microphone_client(&wave_format) {
+    // First get the microphone client to obtain its format
+    let microphone_client = match setup_microphone_client() {
         Ok(client) => client,
         Err(e) => {
             info!("Failed to setup audio client: {:?}", e);
             return Err(e);
         }
     };
-    info!("setup!");
+
+    // Get the device's mix format
+    let mix_format_ptr = microphone_client.GetMixFormat()?;
+    let wave_format = *mix_format_ptr;
 
     let capture_client: IAudioCaptureClient = match microphone_client.GetService() {
         Ok(client) => client,
         Err(e) => {
+            CoTaskMemFree(Some(mix_format_ptr as *mut _));
             info!("Failed to get capture client: {:?}", e);
             return Err(e);
         }
     };
 
+    // Calculate packet duration based on device's actual sample rate
     let packet_duration =
         std::time::Duration::from_nanos((1000000000.0 / wave_format.nSamplesPerSec as f64) as u64);
     let packet_duration_hns = packet_duration.as_nanos() as i64 / 100;
@@ -109,10 +108,12 @@ pub unsafe fn collect_microphone(
     // Get and validate initial QPC value
     let mut start_qpc_i64: i64 = 0;
     if !QueryPerformanceCounter(&mut start_qpc_i64).as_bool() {
+        CoTaskMemFree(Some(mix_format_ptr as *mut _));
         info!("Failed to get initial QPC value");
         return Err(E_FAIL.into());
     }
     if start_qpc_i64 <= 0 {
+        CoTaskMemFree(Some(mix_format_ptr as *mut _));
         info!("Invalid initial QPC value: {}", start_qpc_i64);
         return Err(E_FAIL.into());
     }
@@ -127,6 +128,7 @@ pub unsafe fn collect_microphone(
     match microphone_client.Start() {
         Ok(_) => info!("Audio client started successfully"),
         Err(e) => {
+            CoTaskMemFree(Some(mix_format_ptr as *mut _));
             info!("Failed to start audio client: {:?}", e);
             return Err(e);
         }
@@ -182,12 +184,14 @@ pub unsafe fn collect_microphone(
                         ) {
                             Ok(sample) => {
                                 if let Err(e) = send.send(SendableSample(Arc::new(sample))) {
-                                    info!("Failed to send audio sample: {:?}", e);
+                                    info!("Failed to send audio sample, receiver likely dropped: {:?}", e);
+                                    CoTaskMemFree(Some(mix_format_ptr as *mut _));
                                     return Err(E_FAIL.into());
                                 }
                             }
                             Err(e) => {
                                 info!("Failed to create audio sample: {:?}", e);
+                                CoTaskMemFree(Some(mix_format_ptr as *mut _));
                                 return Err(e);
                             }
                         }
@@ -197,12 +201,14 @@ pub unsafe fn collect_microphone(
                         Ok(_) => {}
                         Err(e) => {
                             info!("Failed to release buffer: {:?}", e);
+                            CoTaskMemFree(Some(mix_format_ptr as *mut _));
                             return Err(e);
                         }
                     }
                 }
                 Err(e) => {
                     info!("Failed to get buffer: {:?}", e);
+                    CoTaskMemFree(Some(mix_format_ptr as *mut _));
                     return Err(e);
                 }
             }
@@ -228,10 +234,12 @@ pub unsafe fn collect_microphone(
         Err(e) => info!("Error stopping audio client: {:?}", e),
     }
 
+    // Clean up
+    CoTaskMemFree(Some(mix_format_ptr as *mut _));
     Ok(())
 }
 
-unsafe fn setup_microphone_client(wave_format: &WAVEFORMATEX) -> Result<IAudioClient> {
+unsafe fn setup_microphone_client() -> Result<IAudioClient> {
     // Initialize COM if not already initialized
     let coinit_result = CoInitializeEx(None, COINIT_MULTITHREADED);
     match coinit_result {
@@ -244,7 +252,6 @@ unsafe fn setup_microphone_client(wave_format: &WAVEFORMATEX) -> Result<IAudioCl
         }
     }
 
-    info!("Creating device enumerator...");
     let enumerator: IMMDeviceEnumerator =
         match CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) {
             Ok(enum_) => enum_,
@@ -253,10 +260,7 @@ unsafe fn setup_microphone_client(wave_format: &WAVEFORMATEX) -> Result<IAudioCl
                 return Err(e);
             }
         };
-    info!("Device enumerator created");
 
-    // Get default audio endpoint
-    info!("Getting default audio endpoint...");
     let device = match enumerator.GetDefaultAudioEndpoint(eCapture, eConsole) {
         Ok(dev) => dev,
         Err(e) => {
@@ -264,22 +268,14 @@ unsafe fn setup_microphone_client(wave_format: &WAVEFORMATEX) -> Result<IAudioCl
             return Err(e);
         }
     };
-    info!("Got default audio endpoint");
 
-    // Set up the callback
-    info!("Creating callback...");
     let callback = AudioEndpointVolumeCallback;
     let callback_interface: IMMNotificationClient = callback.into();
-
-    info!("Registering endpoint notification callback...");
     if let Err(e) = enumerator.RegisterEndpointNotificationCallback(&callback_interface) {
         info!("Failed to register callback: {:?}", e);
         return Err(e);
     }
-    info!("Callback registered");
 
-    // Activate audio client
-    info!("Activating audio client...");
     let audio_client: IAudioClient = match device.Activate(CLSCTX_ALL, None) {
         Ok(client) => client,
         Err(e) => {
@@ -287,54 +283,30 @@ unsafe fn setup_microphone_client(wave_format: &WAVEFORMATEX) -> Result<IAudioCl
             return Err(e);
         }
     };
-    info!("Audio client activated");
 
-    // Get mix format
-    let mix_format_ptr = audio_client.GetMixFormat()?;
-    info!("Got mix format");
-
-    // Get device period
-    info!("Getting device period...");
     let mut default_period = 0;
     let mut minimum_period = 0;
     if let Err(e) =
         audio_client.GetDevicePeriod(Some(&mut default_period), Some(&mut minimum_period))
     {
-        CoTaskMemFree(Some(mix_format_ptr as *mut _));
         info!("Failed to get device period: {:?}", e);
         return Err(e);
     }
-    info!(
-        "Device periods - default: {}, minimum: {}",
-        default_period, minimum_period
-    );
 
-    // Initialize audio client
-    info!("Initializing audio client...");
+    let mix_format_ptr = audio_client.GetMixFormat()?;
     let init_result = audio_client.Initialize(
         AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, // Removed LOOPBACK
+        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
         default_period * 2,
         0,
         mix_format_ptr,
         None,
     );
 
-    // Free the mix format
-    CoTaskMemFree(Some(mix_format_ptr as *mut _));
-
     match init_result {
         Ok(_) => {
-            info!("Audio client initialized successfully");
-
-            // Create and set event
             let event = CreateEventW(None, false, false, None)?;
             audio_client.SetEventHandle(event)?;
-
-            // Get the actual buffer size
-            let buffer_size = audio_client.GetBufferSize()?;
-            info!("Buffer size: {} frames", buffer_size);
-
             Ok(audio_client)
         }
         Err(e) => {
@@ -350,29 +322,43 @@ unsafe fn create_microphone_sample(
     wave_format: &WAVEFORMATEX,
     time_hns: i64,
     packet_duration_hns: i64,
-) -> Result<Vec<u8>> {
-    // Add validation
-    info!("checking if buffer is null");
+) -> Result<IMFSample> {
+    // Validate inputs
     if buffer.is_null() {
         return Err(E_POINTER.into());
     }
 
     let buffer_size = num_frames as usize * wave_format.nBlockAlign as usize;
-    info!(
-        "Creating slice with buffer: {:?}, frames: {}, size: {}",
-        buffer, num_frames, buffer_size
-    );
 
-    // Check for potential overflow
-    if buffer_size > isize::MAX as usize {
-        return Err(E_INVALIDARG.into());
-    }
+    // Create the IMFSample
+    let sample: IMFSample = MFCreateSample()?.into();
 
-    // Verify pointer alignment
-    if (buffer as usize) % std::mem::align_of::<u8>() != 0 {
-        return Err(E_INVALIDARG.into());
-    }
+    // Create media buffer
+    let media_buffer: IMFMediaBuffer = MFCreateMemoryBuffer(buffer_size as u32)?.into();
 
-    let audio_data = std::slice::from_raw_parts(buffer, buffer_size);
-    Ok(audio_data.to_vec())
+    // Lock the buffer and copy audio data
+    let mut buffer_data = std::ptr::null_mut();
+    let mut max_length = 0u32;
+    let mut current_length = 0u32;
+
+    media_buffer.Lock(
+        &mut buffer_data,
+        Some(&mut max_length as *mut u32),
+        Some(&mut current_length as *mut u32),
+    )?;
+
+    // Safety: we validated buffer isn't null and buffer_size is calculated from valid inputs
+    std::ptr::copy_nonoverlapping(buffer, buffer_data, buffer_size);
+
+    media_buffer.SetCurrentLength(buffer_size as u32)?;
+    media_buffer.Unlock()?;
+
+    // Add the buffer to the sample
+    sample.AddBuffer(&media_buffer)?;
+
+    // Set the sample time and duration
+    sample.SetSampleTime(time_hns)?;
+    sample.SetSampleDuration(packet_duration_hns)?;
+
+    Ok(sample)
 }

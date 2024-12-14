@@ -32,6 +32,27 @@ pub fn process_samples(
         );
     }
 
+    // Calculate stream indices the same way as create_sink_writer
+    let video_stream_index = 0;
+    let mut current_stream_index = 1;
+    let audio_stream_index = if capture_audio {
+        let index = current_stream_index;
+        current_stream_index += 1;
+        Some(index)
+    } else {
+        None
+    };
+    let microphone_stream_index = if capture_microphone {
+        Some(current_stream_index)
+    } else {
+        None
+    };
+
+    info!(
+        "Stream indices - Video: {}, Audio: {:?}, Microphone: {:?}",
+        video_stream_index, audio_stream_index, microphone_stream_index
+    );
+
     let converter = unsafe { video::setup_video_converter(&device, width, height) }?;
     info!("Video processor transform created and configured");
 
@@ -42,9 +63,12 @@ pub fn process_samples(
     let mut audio_disconnected = false;
 
     while recording.load(Ordering::Relaxed) {
-        // Process video samples - video is required, so we break on error
+        let mut had_work = false;
+
+        // Process video samples - video is required
         match rec_video.try_recv() {
             Ok(samp) => {
+                had_work = true;
                 let start = std::time::Instant::now();
 
                 let converted = unsafe {
@@ -57,7 +81,7 @@ pub fn process_samples(
                 );
 
                 let write_start = std::time::Instant::now();
-                unsafe { writer.0.WriteSample(0, &converted)? };
+                unsafe { writer.0.WriteSample(video_stream_index, &converted)? };
                 debug!(
                     "Video frame {} written in {:?}",
                     frame_count,
@@ -81,42 +105,49 @@ pub fn process_samples(
         }
 
         // Process audio samples if enabled and not disconnected
-        if capture_audio && !audio_disconnected {
-            match rec_audio.try_recv() {
-                Ok(audio_samp) => {
-                    let write_start = std::time::Instant::now();
-                    unsafe { writer.0.WriteSample(1, &*audio_samp.0)? };
-                    debug!(
-                        "Process audio sample written in {:?}",
-                        write_start.elapsed()
-                    );
-                }
-                Err(TryRecvError::Empty) => {}
-                Err(e) => {
-                    error!("Audio channel disconnected: {:?}", e);
-                    audio_disconnected = true;
+        if let Some(stream_index) = audio_stream_index {
+            if !audio_disconnected {
+                match rec_audio.try_recv() {
+                    Ok(audio_samp) => {
+                        had_work = true;
+                        let write_start = std::time::Instant::now();
+                        unsafe { writer.0.WriteSample(stream_index, &*audio_samp.0)? };
+                        debug!(
+                            "Process audio sample written in {:?}",
+                            write_start.elapsed()
+                        );
+                    }
+                    Err(TryRecvError::Empty) => {}
+                    Err(e) => {
+                        error!("Audio channel disconnected: {:?}", e);
+                        audio_disconnected = true;
+                    }
                 }
             }
         }
 
         // Process microphone samples if enabled and not disconnected
-        if capture_microphone && !microphone_disconnected {
-            match rec_microphone.try_recv() {
-                Ok(mic_samp) => {
-                    let write_start = std::time::Instant::now();
-                    unsafe { writer.0.WriteSample(2, &*mic_samp.0)? };
-                    debug!("Microphone sample written in {:?}", write_start.elapsed());
-                }
-                Err(TryRecvError::Empty) => {}
-                Err(e) => {
-                    error!("Microphone channel disconnected: {:?}", e);
-                    microphone_disconnected = true;
+        if let Some(stream_index) = microphone_stream_index {
+            if !microphone_disconnected {
+                match rec_microphone.try_recv() {
+                    Ok(mic_samp) => {
+                        had_work = true;
+                        let write_start = std::time::Instant::now();
+                        unsafe { writer.0.WriteSample(stream_index, &*mic_samp.0)? };
+                        debug!("Microphone sample written in {:?}", write_start.elapsed());
+                    }
+                    Err(TryRecvError::Empty) => {}
+                    Err(TryRecvError::Disconnected) => {
+                        error!("Microphone channel disconnected");
+                        microphone_disconnected = true;
+                    }
                 }
             }
         }
 
-        // Small sleep to prevent tight loop
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        if !had_work {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
 
     info!(
