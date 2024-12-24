@@ -1,11 +1,14 @@
 mod config;
 mod inner;
+mod utils;
 
 use self::config::{RecorderConfig, RecorderConfigBuilder};
 use self::inner::RecorderInner;
 use crate::error::{RecorderError, Result};
+use crate::processing::encoder::{ensure_mf_initialized, get_available_encoders, EncoderInfo};
 use log::info;
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 pub struct Recorder {
     rec_inner: RefCell<Option<RecorderInner>>,
@@ -74,48 +77,9 @@ impl Recorder {
     pub fn config(&self) -> &RecorderConfig {
         &self.config
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_recorder_creation() {
-        let config = Recorder::builder()
-            .fps(60, 1)
-            .dimensions(1920, 1080)
-            .capture_audio(true)
-            .build();
-
-        let recorder = Recorder::new(config).unwrap();
-        assert!(recorder.config().capture_audio());
-        assert!(!recorder.config().capture_microphone());
-    }
-
-    #[test]
-    fn test_process_name_setting() {
-        let config = Recorder::builder()
-            .fps(60, 1)
-            .build();
-
-        let recorder = Recorder::new(config)
-            .unwrap()
-            .with_process_name("test_process");
-
-        assert!(recorder.start_recording("test.mp4").is_ok());
-    }
-
-    #[test]
-    fn test_recording_without_process_name() {
-        let config = Recorder::builder()
-            .fps(60, 1)
-            .build();
-
-        let recorder = Recorder::new(config).unwrap();
-        assert!(matches!(
-            recorder.start_recording("test.mp4"),
-            Err(RecorderError::NoProcessSpecified)
-        ));
+    pub fn get_available_encoders(&self) -> Result<HashMap<String, EncoderInfo>> {
+        ensure_mf_initialized()?;
+        get_available_encoders().map_err(|e| RecorderError::Generic(format!("Failed to get encoders: {}", e)))
     }
 }

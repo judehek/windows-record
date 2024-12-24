@@ -13,6 +13,7 @@ use super::config::RecorderConfig;
 use crate::capture::{collect_audio, collect_frames, collect_microphone, find_window_by_substring};
 use crate::error::RecorderError;
 use crate::processing::{media, process_samples};
+use crate::recorder::utils::get_encoder_guid;
 use crate::types::{SendableSample, SendableWriter};
 
 pub struct RecorderInner {
@@ -35,6 +36,7 @@ impl RecorderInner {
         let capture_audio = config.capture_audio();
         let capture_microphone = config.capture_microphone();
         let video_bitrate = config.video_bitrate();
+        let encoder_guid = unsafe { get_encoder_guid(config.encoder())? };
 
         let recording = Arc::new(AtomicBool::new(true));
         let mut collect_video_handle: Option<JoinHandle<Result<()>>> = None;
@@ -56,6 +58,7 @@ impl RecorderInner {
                 capture_audio,
                 capture_microphone,
                 video_bitrate,
+                encoder_guid,
             )?;
 
             // Find target window

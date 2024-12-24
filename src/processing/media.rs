@@ -1,6 +1,6 @@
 use std::ptr;
 
-use windows::core::{ComInterface, Result};
+use windows::core::{ComInterface, Result, GUID};
 use windows::Win32::Foundation::TRUE;
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
@@ -15,6 +15,7 @@ pub unsafe fn create_sink_writer(
     capture_audio: bool,
     capture_microphone: bool,
     video_bitrate: u32,
+    encoder_guid: Option<GUID>,
 ) -> Result<IMFSinkWriter> {
     // Create and configure attributes
     let attributes = create_sink_attributes()?;
@@ -29,7 +30,7 @@ pub unsafe fn create_sink_writer(
     let mut current_stream_index = 0;
 
     // Configure video stream (always stream index 0)
-    configure_video_stream(&sink_writer, fps_num, fps_den, s_width, s_height, video_bitrate)?;
+    configure_video_stream(&sink_writer, fps_num, fps_den, s_width, s_height, video_bitrate, encoder_guid)?;
     current_stream_index += 1;
 
     // Configure process audio stream
@@ -66,9 +67,10 @@ unsafe fn configure_video_stream(
     width: u32,
     height: u32,
     video_bitrate: u32,
+    encoder_guid: Option<GUID>,
 ) -> Result<()> {
     // Create output media type
-    let video_output_type = create_video_output_type(fps_num, fps_den, width, height)?;
+    let video_output_type = create_video_output_type(fps_num, fps_den, width, height, encoder_guid)?;
 
     // Create input media type
     let video_input_type = create_video_input_type(fps_num, fps_den, width, height)?;
@@ -110,10 +112,11 @@ unsafe fn create_video_output_type(
     fps_den: u32,
     width: u32,
     height: u32,
+    encoder_guid: Option<GUID>,
 ) -> Result<IMFMediaType> {
     let output_type: IMFMediaType = MFCreateMediaType()?;
     output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-    output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
+    output_type.SetGUID(&MF_MT_SUBTYPE, encoder_guid.as_ref().unwrap_or(&MFVideoFormat_H264))?;
     output_type.SetUINT64(
         &MF_MT_FRAME_RATE,
         ((fps_num as u64) << 32) | (fps_den as u64),

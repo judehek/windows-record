@@ -4,17 +4,41 @@ use win_recorder::{Recorder, Result};
 
 fn main() -> Result<()> {
     env::set_var("RUST_BACKTRACE", "full");
+    env::set_var("RUST_LOG", "info");
     env_logger::init(); // Initialize logging
+    
+    // First get available encoders
+    let recorder = Recorder::builder()
+        .debug_mode(true)
+        .build();
+    let recorder = Recorder::new(recorder)?;
+    
+    let encoders = recorder.get_available_encoders()?;
+    
+    // Log available encoders
+    info!("Available encoders:");
+    for (name, info) in &encoders {
+        info!("  {} (GUID: {:?})", name, info.guid);
+    }
 
-    // Create recorder using builder pattern
+    // Try to find H264 encoder first, fall back to first available
+    let chosen_encoder = encoders.keys()
+        .find(|name| name.contains("H264"))
+        .or_else(|| encoders.keys().next())
+        .expect("No encoders available");
+    
+    info!("Selected encoder: {}", chosen_encoder);
+
+    // Create recorder with chosen encoder
     let config = Recorder::builder()
         .fps(30, 1)
         .dimensions(1920, 1080)
         .capture_audio(true)
         .capture_microphone(true)
-        .debug_mode(true)  // Enables logging
+        .debug_mode(true)
         .output_dir(Some("./logs"))
         .video_bitrate(12000000)
+        .encoder(Some(chosen_encoder.clone()))
         .build();
 
     let recorder = Recorder::new(config)?

@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod media;
 pub mod video;
+pub mod encoder;
 
 use log::{debug, error, info};
 use std::sync::atomic::{AtomicBool, Ordering};
