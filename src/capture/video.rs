@@ -50,8 +50,6 @@ pub unsafe fn collect_frames(
     info!("Starting frame collection");
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 
-    // Setup DXGI duplication
-    let duplication = setup_dxgi_duplication(&device)?;
     let frame_duration = Duration::from_nanos(1_000_000_000 * fps_den as u64 / fps_num as u64);
     let mut next_frame_time = Instant::now();
     let mut frame_count = 0;
@@ -64,9 +62,24 @@ pub unsafe fn collect_frames(
 
     started.wait();
 
+    // Initialize duplication
+    let mut duplication_result = setup_dxgi_duplication(&device);
+    
     while recording.load(Ordering::Relaxed) {
+        // Ensure we have a valid duplication interface
+        if duplication_result.is_err() {
+            warn!("No valid duplication interface, attempting to create one");
+            duplication_result = setup_dxgi_duplication(&device);
+            if duplication_result.is_err() {
+                spin_sleep::sleep(Duration::from_millis(100));
+                continue;
+            }
+        }
+        
+        let duplication = duplication_result.as_ref().unwrap();
+        
         match process_frame(
-            &duplication,
+            duplication,
             &device,
             &context_mutex,
             &staging_texture,
@@ -95,6 +108,16 @@ pub unsafe fn collect_frames(
                     if e.code() == windows::Win32::Graphics::Dxgi::DXGI_ERROR_WAIT_TIMEOUT {
                         continue;
                     }
+                    
+                    // Handle "keyed mutex abandoned" and access lost errors
+                    if e.code() == windows::Win32::Graphics::Dxgi::DXGI_ERROR_ACCESS_LOST {
+                        warn!("DXGI access lost (possibly keyed mutex abandoned), recreating duplication interface");
+                        // Mark the duplication interface as invalid
+                        duplication_result = Err(e);
+                        continue;
+                    }
+                    
+                    // For other errors, return as before
                     return Err(e);
                 }
             },
