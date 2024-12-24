@@ -161,7 +161,7 @@ unsafe fn create_encoder_config() -> Result<Option<IMFAttributes>> {
             &CODECAPI_AVEncCommonRateControlMode,
             eAVEncCommonRateControlMode_GlobalVBR.0.try_into().unwrap(),
         )?;
-        attrs.SetUINT32(&CODECAPI_AVEncCommonMeanBitRate, 5000000)?;
+        attrs.SetUINT32(&CODECAPI_AVEncCommonMeanBitRate, 20000000)?;
         attrs.SetUINT32(&CODECAPI_AVEncMPVDefaultBPictureCount, 0)?;
         attrs.SetUINT32(&CODECAPI_AVEncCommonQuality, 70)?;
         attrs.SetUINT32(&CODECAPI_AVEncCommonLowLatency, 1)?;
