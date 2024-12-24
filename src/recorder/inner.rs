@@ -34,6 +34,7 @@ impl RecorderInner {
         let screen_height = config.screen_height();
         let capture_audio = config.capture_audio();
         let capture_microphone = config.capture_microphone();
+        let video_bitrate = config.video_bitrate();
 
         let recording = Arc::new(AtomicBool::new(true));
         let mut collect_video_handle: Option<JoinHandle<Result<()>>> = None;
@@ -54,6 +55,7 @@ impl RecorderInner {
                 screen_height,
                 capture_audio,
                 capture_microphone,
+                video_bitrate,
             )?;
 
             // Find target window

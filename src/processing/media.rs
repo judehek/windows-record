@@ -14,6 +14,7 @@ pub unsafe fn create_sink_writer(
     s_height: u32,
     capture_audio: bool,
     capture_microphone: bool,
+    video_bitrate: u32,
 ) -> Result<IMFSinkWriter> {
     // Create and configure attributes
     let attributes = create_sink_attributes()?;
@@ -28,7 +29,7 @@ pub unsafe fn create_sink_writer(
     let mut current_stream_index = 0;
 
     // Configure video stream (always stream index 0)
-    configure_video_stream(&sink_writer, fps_num, fps_den, s_width, s_height)?;
+    configure_video_stream(&sink_writer, fps_num, fps_den, s_width, s_height, video_bitrate)?;
     current_stream_index += 1;
 
     // Configure process audio stream
@@ -64,6 +65,7 @@ unsafe fn configure_video_stream(
     fps_den: u32,
     width: u32,
     height: u32,
+    video_bitrate: u32,
 ) -> Result<()> {
     // Create output media type
     let video_output_type = create_video_output_type(fps_num, fps_den, width, height)?;
@@ -72,7 +74,7 @@ unsafe fn configure_video_stream(
     let video_input_type = create_video_input_type(fps_num, fps_den, width, height)?;
 
     // Configure encoder
-    let config_attrs = create_encoder_config()?;
+    let config_attrs = create_encoder_config(video_bitrate)?;
 
     // First add stream, then set input type
     sink_writer.AddStream(&video_output_type)?;
@@ -152,7 +154,7 @@ unsafe fn create_video_input_type(
     Ok(input_type)
 }
 
-unsafe fn create_encoder_config() -> Result<Option<IMFAttributes>> {
+unsafe fn create_encoder_config(video_bitrate: u32) -> Result<Option<IMFAttributes>> {
     let mut config_attrs: Option<IMFAttributes> = None;
     MFCreateAttributes(&mut config_attrs, 0)?;
 
@@ -161,7 +163,7 @@ unsafe fn create_encoder_config() -> Result<Option<IMFAttributes>> {
             &CODECAPI_AVEncCommonRateControlMode,
             eAVEncCommonRateControlMode_GlobalVBR.0.try_into().unwrap(),
         )?;
-        attrs.SetUINT32(&CODECAPI_AVEncCommonMeanBitRate, 20000000)?;
+        attrs.SetUINT32(&CODECAPI_AVEncCommonMeanBitRate, video_bitrate)?;
         attrs.SetUINT32(&CODECAPI_AVEncMPVDefaultBPictureCount, 0)?;
         attrs.SetUINT32(&CODECAPI_AVEncCommonQuality, 70)?;
         attrs.SetUINT32(&CODECAPI_AVEncCommonLowLatency, 1)?;

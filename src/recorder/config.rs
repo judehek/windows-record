@@ -7,7 +7,7 @@ pub struct RecorderConfig {
     fps_den: u32,
     screen_width: u32,
     screen_height: u32,
-    video_bitrate: u64,
+    video_bitrate: u32,
     encoder: Option<String>,
     
     // Audio settings
@@ -63,7 +63,7 @@ impl RecorderConfig {
     pub fn capture_microphone(&self) -> bool { self.capture_microphone }
     pub fn output_dir(&self) -> Option<&PathBuf> { self.output_dir.as_ref() }
     pub fn debug_mode(&self) -> bool { self.debug_mode }
-    pub fn video_bitrate(&self) -> u64 { self.video_bitrate }
+    pub fn video_bitrate(&self) -> u32 { self.video_bitrate }
     pub fn microphone_volume(&self) -> Option<f32> { self.microphone_volume }
     pub fn encoder(&self) -> Option<&str> { self.encoder.as_deref() }
     pub fn audio_source(&self) -> &AudioSource { &self.audio_source }
@@ -112,7 +112,7 @@ impl RecorderConfigBuilder {
         self
     }
 
-    pub fn video_bitrate(mut self, video_bitrate: u64) -> Self {
+    pub fn video_bitrate(mut self, video_bitrate: u32) -> Self {
         self.config.video_bitrate = video_bitrate;
         self
     }
