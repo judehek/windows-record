@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use windows::core::GUID;
+
 #[derive(Clone)]
 pub struct RecorderConfig {
     // Video settings
@@ -8,7 +10,7 @@ pub struct RecorderConfig {
     screen_width: u32,
     screen_height: u32,
     video_bitrate: u32,
-    encoder: Option<String>,
+    encoder: Option<GUID>,
     
     // Audio settings
     capture_audio: bool,
@@ -65,7 +67,7 @@ impl RecorderConfig {
     pub fn debug_mode(&self) -> bool { self.debug_mode }
     pub fn video_bitrate(&self) -> u32 { self.video_bitrate }
     pub fn microphone_volume(&self) -> Option<f32> { self.microphone_volume }
-    pub fn encoder(&self) -> Option<&str> { self.encoder.as_deref() }
+    pub fn encoder(&self) -> Option<GUID> { self.encoder }
     pub fn audio_source(&self) -> &AudioSource { &self.audio_source }
     pub fn system_volume(&self) -> Option<f32> { self.system_volume }
 }
@@ -122,7 +124,7 @@ impl RecorderConfigBuilder {
         self
     }
     
-    pub fn encoder(mut self, encoder: impl Into<Option<String>>) -> Self {
+    pub fn encoder(mut self, encoder: impl Into<Option<GUID>>) -> Self {
         self.config.encoder = encoder.into();
         self
     }

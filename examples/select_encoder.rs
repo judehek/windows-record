@@ -6,14 +6,14 @@ fn main() -> Result<()> {
     env::set_var("RUST_BACKTRACE", "full");
     env::set_var("RUST_LOG", "info");
     env_logger::init(); // Initialize logging
-    
+
     // First get available encoders
     let recorder = Recorder::builder()
         .debug_mode(true)
         .build();
     let recorder = Recorder::new(recorder)?;
     
-    let encoders = recorder.get_available_encoders()?;
+    let encoders = recorder.get_available_video_encoders()?;
     
     // Log available encoders
     info!("Available encoders:");
@@ -22,12 +22,11 @@ fn main() -> Result<()> {
     }
 
     // Try to find H264 encoder first, fall back to first available
-    let chosen_encoder = encoders.keys()
-        .find(|name| name.contains("H264"))
-        .or_else(|| encoders.keys().next())
-        .expect("No encoders available");
+    let chosen_encoder = encoders.values()
+    .find(|info| info.name.contains("264") || info.name.contains("H264"))
+    .expect("No H264 encoder available");
     
-    info!("Selected encoder: {}", chosen_encoder);
+    info!("Selected encoder: {}", chosen_encoder.name);
 
     // Create recorder with chosen encoder
     let config = Recorder::builder()
@@ -38,7 +37,7 @@ fn main() -> Result<()> {
         .debug_mode(true)
         .output_dir(Some("./logs"))
         .video_bitrate(12000000)
-        .encoder(Some(chosen_encoder.clone()))
+        .encoder(Some(chosen_encoder.guid))
         .build();
 
     let recorder = Recorder::new(config)?

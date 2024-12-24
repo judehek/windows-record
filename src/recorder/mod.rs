@@ -5,7 +5,7 @@ mod utils;
 use self::config::{RecorderConfig, RecorderConfigBuilder};
 use self::inner::RecorderInner;
 use crate::error::{RecorderError, Result};
-use crate::processing::encoder::{ensure_mf_initialized, get_available_encoders, EncoderInfo};
+use crate::processing::encoder::{ensure_mf_initialized, get_available_video_encoders, VideoEncoderInfo};
 use log::info;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -78,8 +78,8 @@ impl Recorder {
         &self.config
     }
 
-    pub fn get_available_encoders(&self) -> Result<HashMap<String, EncoderInfo>> {
+    pub fn get_available_video_encoders(&self) -> Result<HashMap<String, VideoEncoderInfo>> {
         ensure_mf_initialized()?;
-        get_available_encoders().map_err(|e| RecorderError::Generic(format!("Failed to get encoders: {}", e)))
+        get_available_video_encoders().map_err(|e| RecorderError::Generic(format!("Failed to get encoders: {}", e)))
     }
 }

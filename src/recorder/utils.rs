@@ -1,10 +1,10 @@
 use windows::core::{Result, GUID};
-use crate::processing::encoder::get_available_encoders;
+use crate::processing::encoder::get_available_video_encoders;
 
 pub unsafe fn get_encoder_guid(requested_encoder: Option<&str>) -> Result<Option<GUID>> {
     match requested_encoder {
         Some(encoder_name) => {
-            get_available_encoders().map(|encoders| {
+            get_available_video_encoders().map(|encoders| {
                 if let Some(encoder_info) = encoders.get(encoder_name) {
                     Some(encoder_info.guid)
                 } else {

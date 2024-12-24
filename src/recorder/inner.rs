@@ -36,7 +36,7 @@ impl RecorderInner {
         let capture_audio = config.capture_audio();
         let capture_microphone = config.capture_microphone();
         let video_bitrate = config.video_bitrate();
-        let encoder_guid = unsafe { get_encoder_guid(config.encoder())? };
+        let encoder_guid = config.encoder();
 
         let recording = Arc::new(AtomicBool::new(true));
         let mut collect_video_handle: Option<JoinHandle<Result<()>>> = None;
