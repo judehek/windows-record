@@ -1,43 +1,32 @@
 use log::info;
-use std::{env, io, time::Duration};
+use std::{env, time::Duration};
 use win_recorder::{Recorder, Result};
 
 fn main() -> Result<()> {
     env::set_var("RUST_BACKTRACE", "full");
 
-    // create recorder with default logging enabled
-    let rec = Recorder::new(30, 1, 1920, 1080)?;
+    // Create recorder using builder pattern
+    let config = Recorder::builder()
+        .fps(30, 1)
+        .dimensions(1920, 1080)
+        .capture_audio(true)
+        .capture_microphone(true)
+        .debug_mode(true)  // Enables logging
+        .output_dir(Some("./logs"))
+        .build();
 
-    // optionally disable logging
-    //rec.disable_logging()?;
+    let recorder = Recorder::new(config)?
+        .with_process_name("League of Legends");
 
-    // or set a custom log directory
-    rec.set_log_directory("./logs")?;
-
-    // log system information (these will only show if logging is enabled)
+    // Log system information
     info!("OS: {}", env::consts::OS);
     info!("Architecture: {}", env::consts::ARCH);
     info!("Application started");
 
-    rec.set_process_name("League of Legends");
-    info!("Set process name to League of Legends");
-
-    rec.set_capture_audio(true);
-    info!(
-        "Audio capture is {}",
-        if rec.is_audio_capture_enabled() {
-            "enabled"
-        } else {
-            "disabled"
-        }
-    );
-
-    rec.set_capture_microphone(true);
-
     std::thread::sleep(Duration::from_secs(3));
     info!("Starting recording");
 
-    let res = rec.start_recording("output.mp4");
+    let res = recorder.start_recording("output.mp4");
     match &res {
         Ok(_) => info!("Recording started successfully"),
         Err(e) => log::error!("Failed to start recording: {:?}", e),
@@ -46,7 +35,7 @@ fn main() -> Result<()> {
     std::thread::sleep(Duration::from_secs(10));
     info!("Stopping recording");
 
-    let res2 = rec.stop_recording();
+    let res2 = recorder.stop_recording();
     match &res2 {
         Ok(_) => info!("Recording stopped successfully"),
         Err(e) => log::error!("Failed to stop recording: {:?}", e),
