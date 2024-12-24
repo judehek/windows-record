@@ -40,7 +40,7 @@ impl Default for RecorderConfig {
             capture_microphone: false,
             output_dir: None,
             debug_mode: false,
-            video_bitrate: 800000,
+            video_bitrate: 8000000,
             microphone_volume: None,
             encoder: None,
             audio_source: AudioSource::ActiveWindow,
