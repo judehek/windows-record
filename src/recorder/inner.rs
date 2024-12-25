@@ -25,7 +25,7 @@ pub struct RecorderInner {
 }
 
 impl RecorderInner {
-    pub fn init(filename: &str, config: &RecorderConfig, process_name: &str) -> Result<Self> {
+    pub fn init(config: &RecorderConfig, process_name: &str) -> Result<Self> {
         info!("Initializing recorder for process: {}", process_name);
 
         // Clone the necessary values from config at the start
@@ -37,6 +37,12 @@ impl RecorderInner {
         let capture_microphone = config.capture_microphone();
         let video_bitrate = config.video_bitrate();
         let encoder_guid = config.encoder();
+
+
+        // Parse out path string from PathBuf
+        let output_path = config.output_path()
+            .to_str()
+            .ok_or_else(|| RecorderError::FailedToStart("Invalid path string".to_string()))?;
 
         let recording = Arc::new(AtomicBool::new(true));
         let mut collect_video_handle: Option<JoinHandle<Result<()>>> = None;
@@ -50,7 +56,7 @@ impl RecorderInner {
 
             // Create and configure media sink
             let media_sink = media::create_sink_writer(
-                filename,
+                output_path,
                 fps_num,
                 fps_den,
                 screen_width,

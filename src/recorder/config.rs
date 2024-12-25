@@ -20,7 +20,7 @@ pub struct RecorderConfig {
     audio_source: AudioSource,
     
     // Output settings
-    output_dir: Option<PathBuf>,
+    output_path: PathBuf,
     debug_mode: bool,
 }
 
@@ -40,7 +40,7 @@ impl Default for RecorderConfig {
             screen_height: 1080,
             capture_audio: true,
             capture_microphone: false,
-            output_dir: None,
+            output_path: PathBuf::from("."),
             debug_mode: false,
             video_bitrate: 8000000,
             microphone_volume: None,
@@ -63,7 +63,7 @@ impl RecorderConfig {
     pub fn screen_height(&self) -> u32 { self.screen_height }
     pub fn capture_audio(&self) -> bool { self.capture_audio }
     pub fn capture_microphone(&self) -> bool { self.capture_microphone }
-    pub fn output_dir(&self) -> Option<&PathBuf> { self.output_dir.as_ref() }
+    pub fn output_path(&self) -> &PathBuf { &self.output_path }
     pub fn debug_mode(&self) -> bool { self.debug_mode }
     pub fn video_bitrate(&self) -> u32 { self.video_bitrate }
     pub fn microphone_volume(&self) -> Option<f32> { self.microphone_volume }
@@ -104,10 +104,11 @@ impl RecorderConfigBuilder {
         self
     }
 
-    pub fn output_dir<P: Into<PathBuf>>(mut self, dir: Option<P>) -> Self {
-        self.config.output_dir = dir.map(|p| p.into());
+    pub fn output_path<P: Into<PathBuf>>(mut self, dir: P) -> Self {
+        self.config.output_path = dir.into();
         self
     }
+
 
     pub fn debug_mode(mut self, enabled: bool) -> Self {
         self.config.debug_mode = enabled;

@@ -17,7 +17,7 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// Create a new recorder instance with configuration
+    // Create a new recorder instance with configuration
     pub fn new(config: RecorderConfig) -> Result<Self> {
         Ok(Self {
             rec_inner: RefCell::new(None),
@@ -26,35 +26,35 @@ impl Recorder {
         })
     }
 
-    /// Get a configuration builder to create a new configuration
+    // Get a configuration builder to create a new configuration
     pub fn builder() -> RecorderConfigBuilder {
         RecorderConfig::builder()
     }
 
-    /// Set the process name to record
+    // Set the process name to record
     pub fn with_process_name(mut self, proc_name: &str) -> Self {
         *self.process_name.borrow_mut() = Some(proc_name.to_string());
         self
     }
 
-    /// Start recording to the specified file
-    pub fn start_recording(&self, filename: &str) -> Result<()> {
+    // Begin recording
+    pub fn start_recording(&self) -> Result<()> {
         if self.config.debug_mode() {
-            info!("Starting recording to file: {}", filename);
+            info!("Starting recording to file: {}", self.config.output_path().display());
         }
-
+    
         let process_name = self.process_name.borrow();
         let mut rec_inner = self.rec_inner.borrow_mut();
-
+    
         let Some(ref proc_name) = *process_name else {
             return Err(RecorderError::NoProcessSpecified);
         };
-
+    
         *rec_inner = Some(
-            RecorderInner::init(filename, &self.config, proc_name)
+            RecorderInner::init(&self.config, proc_name)
                 .map_err(|e| RecorderError::FailedToStart(e.to_string()))?,
         );
-
+    
         Ok(())
     }
 

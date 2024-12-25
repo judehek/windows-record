@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::ptr;
 
 use windows::core::{ComInterface, Result, GUID};
@@ -7,7 +8,7 @@ use windows::Win32::Graphics::Dxgi::IDXGISurface;
 use windows::Win32::Media::MediaFoundation::*;
 
 pub unsafe fn create_sink_writer(
-    filename: &str,
+    output_dir: &str,
     fps_num: u32,
     fps_den: u32,
     s_width: u32,
@@ -22,7 +23,7 @@ pub unsafe fn create_sink_writer(
 
     // Create sink writer
     let sink_writer: IMFSinkWriter = MFCreateSinkWriterFromURL(
-        &windows::core::HSTRING::from(filename),
+        &windows::core::HSTRING::from(output_dir),
         None,
         attributes.as_ref(),
     )?;

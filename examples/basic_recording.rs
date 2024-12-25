@@ -13,7 +13,7 @@ fn main() -> Result<()> {
         .capture_audio(true)
         .capture_microphone(true)
         .debug_mode(true)  // Enables logging
-        .output_dir(Some("./logs"))
+        .output_path("./output.mp4")
         .video_bitrate(12000000)
         .build();
 
@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     std::thread::sleep(Duration::from_secs(3));
     info!("Starting recording");
 
-    let res = recorder.start_recording("output.mp4");
+    let res = recorder.start_recording();
     match &res {
         Ok(_) => info!("Recording started successfully"),
         Err(e) => log::error!("Failed to start recording: {:?}", e),
