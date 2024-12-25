@@ -70,7 +70,7 @@ unsafe fn configure_video_stream(
     encoder_guid: Option<GUID>,
 ) -> Result<()> {
     // Create output media type
-    let video_output_type = create_video_output_type(fps_num, fps_den, width, height, encoder_guid)?;
+    let video_output_type = create_video_output_type(fps_num, fps_den, width, height)?;
 
     // Create input media type
     let video_input_type = create_video_input_type(fps_num, fps_den, width, height)?;
@@ -112,11 +112,10 @@ unsafe fn create_video_output_type(
     fps_den: u32,
     width: u32,
     height: u32,
-    encoder_guid: Option<GUID>,
 ) -> Result<IMFMediaType> {
     let output_type: IMFMediaType = MFCreateMediaType()?;
     output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-    output_type.SetGUID(&MF_MT_SUBTYPE, encoder_guid.as_ref().unwrap_or(&MFVideoFormat_H264))?;
+    output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
     output_type.SetUINT64(
         &MF_MT_FRAME_RATE,
         ((fps_num as u64) << 32) | (fps_den as u64),
