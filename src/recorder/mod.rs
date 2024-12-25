@@ -2,7 +2,9 @@ mod config;
 mod inner;
 mod utils;
 
-use self::config::{RecorderConfig, RecorderConfigBuilder};
+// Re-export public types from config
+pub use self::config::{RecorderConfig, RecorderConfigBuilder, AudioSource};
+
 use self::inner::RecorderInner;
 use crate::error::{RecorderError, Result};
 use crate::processing::encoder::{ensure_mf_initialized, get_available_video_encoders, VideoEncoderInfo};
@@ -32,7 +34,7 @@ impl Recorder {
     }
 
     // Set the process name to record
-    pub fn with_process_name(mut self, proc_name: &str) -> Self {
+    pub fn with_process_name(self, proc_name: &str) -> Self {
         *self.process_name.borrow_mut() = Some(proc_name.to_string());
         self
     }

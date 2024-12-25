@@ -1,8 +1,9 @@
-pub mod capture;
-pub mod error;
-pub mod processing;
-pub mod recorder;
-pub mod types;
+// Private modules
+mod capture;
+mod error;
+mod processing;
+mod recorder;
+mod types;
 
 pub use error::{RecorderError, Result};
-pub use recorder::Recorder;
+pub use recorder::{Recorder, RecorderConfig, RecorderConfigBuilder, AudioSource};
