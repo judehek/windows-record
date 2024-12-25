@@ -145,12 +145,6 @@ pub fn process_samples(
                                     Some(&mut max_length),
                                     Some(&mut current_length),
                                 ) {
-                                    // Change to f32 and adjust the length calculation
-                                    let samples = std::slice::from_raw_parts(
-                                        buffer as *const f32,
-                                        std::cmp::min(current_length as usize / 4, 16),
-                                    ); // Divide by 4 for 32-bit samples
-                                    info!("Microphone sample values: {:?}", samples);
 
                                     let _ = media_buffer.Unlock();
                                 }

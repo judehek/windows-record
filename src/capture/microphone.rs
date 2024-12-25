@@ -369,14 +369,6 @@ unsafe fn create_microphone_sample(
 
         // Copy the samples
         std::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len());
-
-        // Optional: Debug log a few samples to verify values
-        if num_frames > 0 {
-            info!(
-                "First few 32-bit samples: {:?}",
-                &src[..std::cmp::min(8, src.len())]
-            );
-        }
     } else if wave_format.wBitsPerSample == 16 {
         let src =
             std::slice::from_raw_parts(buffer as *const i16, num_frames as usize * num_channels);

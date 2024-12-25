@@ -104,8 +104,8 @@ impl RecorderConfigBuilder {
         self
     }
 
-    pub fn output_path<P: Into<PathBuf>>(mut self, dir: P) -> Self {
-        self.config.output_path = dir.into();
+    pub fn output_path<P: Into<PathBuf>>(mut self, path: P) -> Self {
+        self.config.output_path = path.into();
         self
     }
 

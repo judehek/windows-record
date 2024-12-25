@@ -8,7 +8,7 @@ use windows::Win32::Graphics::Dxgi::IDXGISurface;
 use windows::Win32::Media::MediaFoundation::*;
 
 pub unsafe fn create_sink_writer(
-    output_dir: &str,
+    output_path: &str,
     fps_num: u32,
     fps_den: u32,
     s_width: u32,
@@ -23,7 +23,7 @@ pub unsafe fn create_sink_writer(
 
     // Create sink writer
     let sink_writer: IMFSinkWriter = MFCreateSinkWriterFromURL(
-        &windows::core::HSTRING::from(output_dir),
+        &windows::core::HSTRING::from(output_path),
         None,
         attributes.as_ref(),
     )?;
