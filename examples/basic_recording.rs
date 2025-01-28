@@ -12,7 +12,7 @@ fn main() -> Result<()> {
         .fps(30, 1)
         .dimensions(2560, 1440)
         .capture_audio(true)
-        .capture_microphone(true)
+        .capture_microphone(false)
         .debug_mode(true)  // Enables logging
         .output_path("output.mp4")
         .video_bitrate(8000000)

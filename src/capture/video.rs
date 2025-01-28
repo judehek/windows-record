@@ -80,13 +80,10 @@ pub unsafe fn collect_frames(
         
         match process_frame(
             duplication,
-            &device,
             &context_mutex,
             &staging_texture,
             &blank_texture,
             hwnd,
-            width,
-            height,
             fps_num,
             &send,
             frame_count,
@@ -133,13 +130,10 @@ pub unsafe fn collect_frames(
 
 unsafe fn process_frame(
     duplication: &IDXGIOutputDuplication,
-    device: &ID3D11Device,
     context_mutex: &Arc<Mutex<ID3D11DeviceContext>>,
     staging_texture: &ID3D11Texture2D,
     blank_texture: &ID3D11Texture2D,
     hwnd: HWND,
-    width: u32,
-    height: u32,
     fps_num: u32,
     send: &Sender<SendableSample>,
     frame_count: u64,
