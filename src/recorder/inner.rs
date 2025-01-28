@@ -31,8 +31,10 @@ impl RecorderInner {
         // Clone the necessary values from config at the start
         let fps_num = config.fps_num();
         let fps_den = config.fps_den();
-        let screen_width = config.screen_width();
-        let screen_height = config.screen_height();
+        let input_width = config.input_width();
+        let input_height = config.input_height();
+        let output_width = config.output_width();
+        let output_height = config.output_height();
         let capture_audio = config.capture_audio();
         let capture_microphone = config.capture_microphone();
         let video_bitrate = config.video_bitrate();
@@ -59,8 +61,8 @@ impl RecorderInner {
                 output_path,
                 fps_num,
                 fps_den,
-                screen_width,
-                screen_height,
+                output_width,
+                output_height,
                 capture_audio,
                 capture_microphone,
                 video_bitrate,
@@ -109,8 +111,8 @@ impl RecorderInner {
                     hwnd,
                     fps_num,
                     fps_den,
-                    screen_width,
-                    screen_height,
+                    input_width,
+                    input_height,
                     barrier_clone,
                     dev_clone,
                     context_mutex,
@@ -144,8 +146,10 @@ impl RecorderInner {
                     receiver_audio,
                     receiver_microphone,
                     rec_clone,
-                    screen_width,
-                    screen_height,
+                    input_width,     // Capture dimensions
+                    input_height,    // Capture dimensions
+                    output_width,    // Target dimensions
+                    output_height,   // Target dimensions
                     device,
                     capture_audio,
                     capture_microphone,

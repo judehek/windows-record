@@ -22,14 +22,14 @@ pub unsafe fn setup_dxgi_duplication(device: &ID3D11Device) -> Result<IDXGIOutpu
 
 pub unsafe fn create_blank_dxgi_texture(
     device: &ID3D11Device,
-    width: u32,
-    height: u32,
+    input_width: u32,
+    input_height: u32,
 ) -> Result<(ID3D11Texture2D, IDXGIResource)> {
     use windows::Win32::Graphics::Direct3D11::*;
 
     let desc = D3D11_TEXTURE2D_DESC {
-        Width: width,
-        Height: height,
+        Width: input_width,
+        Height: input_height,
         MipLevels: 1,
         ArraySize: 1,
         Format: DXGI_FORMAT_B8G8R8A8_UNORM,

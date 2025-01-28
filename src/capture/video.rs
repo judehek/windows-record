@@ -41,8 +41,8 @@ pub unsafe fn collect_frames(
     hwnd: HWND,
     fps_num: u32,
     fps_den: u32,
-    width: u32,
-    height: u32,
+    input_width: u32,
+    input_height: u32,
     started: Arc<Barrier>,
     device: Arc<ID3D11Device>,
     context_mutex: Arc<Mutex<ID3D11DeviceContext>>,
@@ -57,8 +57,8 @@ pub unsafe fn collect_frames(
     let mut num_duped = 0;
 
     // Create staging texture once and reuse
-    let staging_texture = create_staging_texture(&device, width, height)?;
-    let (blank_texture, _blank_resource) = create_blank_dxgi_texture(&device, width, height)?;
+    let staging_texture = create_staging_texture(&device, input_width, input_height)?;
+    let (blank_texture, _blank_resource) = create_blank_dxgi_texture(&device, input_width, input_height)?;
 
     started.wait();
 
@@ -213,15 +213,15 @@ fn handle_frame_timing(
 
 unsafe fn create_staging_texture(
     device: &ID3D11Device,
-    width: u32,
-    height: u32,
+    input_width: u32,
+    input_height: u32,
 ) -> Result<ID3D11Texture2D> {
     use windows::Win32::Graphics::Direct3D11::*;
     use windows::Win32::Graphics::Dxgi::Common::*;
 
     let desc = D3D11_TEXTURE2D_DESC {
-        Width: width,
-        Height: height,
+        Width: input_width,
+        Height: input_height,
         MipLevels: 1,
         ArraySize: 1,
         Format: DXGI_FORMAT_B8G8R8A8_UNORM,

@@ -10,7 +10,8 @@ fn main() -> Result<()> {
     // Create recorder using builder pattern
     let config = Recorder::builder()
         .fps(30, 1)
-        .dimensions(2560, 1440)
+        .input_dimensions(2560, 1440)
+        .output_dimensions(1920, 1080)
         .capture_audio(true)
         .capture_microphone(false)
         .debug_mode(true)  // Enables logging

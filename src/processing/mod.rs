@@ -18,8 +18,10 @@ pub fn process_samples(
     rec_audio: Receiver<SendableSample>,
     rec_microphone: Receiver<SendableSample>,
     recording: Arc<AtomicBool>,
-    width: u32,
-    height: u32,
+    input_width: u32,   // Changed parameter name to be explicit
+    input_height: u32,  // Changed parameter name to be explicit
+    output_width: u32,  // Added output width
+    output_height: u32, // Added output height
     device: Arc<ID3D11Device>,
     capture_audio: bool,
     capture_microphone: bool,
@@ -54,7 +56,16 @@ pub fn process_samples(
         video_stream_index, audio_stream_index, microphone_stream_index
     );
 
-    let converter = unsafe { video::setup_video_converter(&device, width, height) }?;
+    // Updated to use input/output dimensions
+    let converter = unsafe { 
+        video::setup_video_converter(
+            &device, 
+            input_width, 
+            input_height, 
+            output_width, 
+            output_height
+        )
+    }?;
     info!("Video processor transform created and configured");
 
     let mut frame_count = 0;
@@ -73,7 +84,13 @@ pub fn process_samples(
                 let start = std::time::Instant::now();
 
                 let converted = unsafe {
-                    video::convert_bgra_to_nv12(&device, &converter, &*samp.0, width, height)?
+                    video::convert_bgra_to_nv12(
+                        &device, 
+                        &converter, 
+                        &*samp.0, 
+                        output_width,  // Changed to output dimensions
+                        output_height
+                    )?
                 };
                 debug!(
                     "Video frame {} converted in {:?}",

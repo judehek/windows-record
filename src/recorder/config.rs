@@ -7,8 +7,10 @@ pub struct RecorderConfig {
     // Video settings
     fps_num: u32,
     fps_den: u32,
-    screen_width: u32,
-    screen_height: u32,
+    input_width: u32,
+    input_height: u32,
+    output_width: u32,
+    output_height: u32,
     video_bitrate: u32,
     encoder: Option<GUID>,
     
@@ -36,13 +38,15 @@ impl Default for RecorderConfig {
         Self {
             fps_num: 60,
             fps_den: 1,
-            screen_width: 1920,
-            screen_height: 1080,
+            input_width: 1920,
+            input_height: 1080,
+            output_width: 1920,
+            output_height: 1080,
             capture_audio: true,
             capture_microphone: false,
             output_path: PathBuf::from("."),
             debug_mode: false,
-            video_bitrate: 8000000,
+            video_bitrate: 6000000,
             microphone_volume: None,
             encoder: None,
             audio_source: AudioSource::ActiveWindow,
@@ -56,11 +60,13 @@ impl RecorderConfig {
         RecorderConfigBuilder::default()
     }
 
-    // Getter methods
+    // Updated getter methods
     pub fn fps_num(&self) -> u32 { self.fps_num }
     pub fn fps_den(&self) -> u32 { self.fps_den }
-    pub fn screen_width(&self) -> u32 { self.screen_width }
-    pub fn screen_height(&self) -> u32 { self.screen_height }
+    pub fn input_width(&self) -> u32 { self.input_width }
+    pub fn input_height(&self) -> u32 { self.input_height }
+    pub fn output_width(&self) -> u32 { self.output_width }
+    pub fn output_height(&self) -> u32 { self.output_height }
     pub fn capture_audio(&self) -> bool { self.capture_audio }
     pub fn capture_microphone(&self) -> bool { self.capture_microphone }
     pub fn output_path(&self) -> &PathBuf { &self.output_path }
@@ -88,9 +94,16 @@ impl RecorderConfigBuilder {
         self
     }
 
-    pub fn dimensions(mut self, width: u32, height: u32) -> Self {
-        self.config.screen_width = width;
-        self.config.screen_height = height;
+    // Updated dimension methods
+    pub fn input_dimensions(mut self, width: u32, height: u32) -> Self {
+        self.config.input_width = width;
+        self.config.input_height = height;
+        self
+    }
+
+    pub fn output_dimensions(mut self, width: u32, height: u32) -> Self {
+        self.config.output_width = width;
+        self.config.output_height = height;
         self
     }
 
@@ -108,7 +121,6 @@ impl RecorderConfigBuilder {
         self.config.output_path = path.into();
         self
     }
-
 
     pub fn debug_mode(mut self, enabled: bool) -> Self {
         self.config.debug_mode = enabled;

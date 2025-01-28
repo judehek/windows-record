@@ -31,7 +31,8 @@ fn main() -> Result<()> {
     // Create recorder with chosen encoder
     let config = Recorder::builder()
         .fps(30, 1)
-        .dimensions(1920, 1080)
+        .input_dimensions(2560, 1440)
+        .output_dimensions(1920, 1080)
         .capture_audio(true)
         .capture_microphone(true)
         .debug_mode(true)

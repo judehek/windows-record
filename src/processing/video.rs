@@ -9,14 +9,16 @@ use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 
 pub unsafe fn setup_video_converter(
     device: &ID3D11Device,
-    width: u32,
-    height: u32,
+    input_width: u32,
+    input_height: u32,
+    output_width: u32,
+    output_height: u32,
 ) -> Result<IMFTransform> {
-    // Create converter using CreateInstance instead of factory
+    // Create converter
     let converter: IMFTransform =
         CoCreateInstance(&CLSID_VideoProcessorMFT, None, CLSCTX_INPROC_SERVER)?;
 
-    // Set input media type (B8G8R8A8_UNORM)
+    // Set input media type (BGRA)
     let input_type: IMFMediaType = MFCreateMediaType()?;
     input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
     input_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_ARGB32)?;
@@ -24,9 +26,9 @@ pub unsafe fn setup_video_converter(
         &MF_MT_INTERLACE_MODE,
         MFVideoInterlace_Progressive.0.try_into().unwrap(),
     )?;
-    input_type.SetUINT64(&MF_MT_FRAME_SIZE, ((width as u64) << 32) | (height as u64))?;
+    input_type.SetUINT64(&MF_MT_FRAME_SIZE, ((input_width as u64) << 32) | (input_height as u64))?;
     input_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1 << 32) | 1)?;
-    input_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, (width * 4) as u32)?;
+    input_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, (input_width * 4) as u32)?;
     converter.SetInputType(0, &input_type, 0)?;
 
     // Set output media type (NV12)
@@ -37,8 +39,8 @@ pub unsafe fn setup_video_converter(
         &MF_MT_INTERLACE_MODE,
         MFVideoInterlace_Progressive.0.try_into().unwrap(),
     )?;
-    output_type.SetUINT64(&MF_MT_FRAME_SIZE, ((width as u64) << 32) | (height as u64))?;
-    output_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, width as u32)?;
+    output_type.SetUINT64(&MF_MT_FRAME_SIZE, ((output_width as u64) << 32) | (output_height as u64))?;
+    output_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, output_width as u32)?;
     output_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1 << 32) | 1)?;
     converter.SetOutputType(0, &output_type, 0)?;
 
@@ -49,15 +51,15 @@ pub unsafe fn convert_bgra_to_nv12(
     device: &ID3D11Device,
     converter: &IMFTransform,
     in_sample: &IMFSample,
-    width: u32,
-    height: u32,
+    output_width: u32,
+    output_height: u32,
 ) -> Result<IMFSample> {
     let duration = in_sample.GetSampleDuration()?;
     let time = in_sample.GetSampleTime()?;
     debug!("Processing frame at time: {}, duration: {}", time, duration);
 
     // Create NV12 texture and output sample
-    let (nv12_texture, output_sample) = create_nv12_output(device, width, height)?;
+    let (nv12_texture, output_sample) = create_nv12_output(device, output_width, output_height)?;
 
     // Process the frame
     converter.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
@@ -88,16 +90,16 @@ pub unsafe fn convert_bgra_to_nv12(
 
 unsafe fn create_nv12_output(
     device: &ID3D11Device,
-    width: u32,
-    height: u32,
+    output_width: u32,
+    output_height: u32,
 ) -> Result<(ID3D11Texture2D, IMFSample)> {
     use windows::Win32::Graphics::Direct3D11::*;
     use windows::Win32::Graphics::Dxgi::Common::*;
 
     // Create NV12 texture
     let nv12_desc = D3D11_TEXTURE2D_DESC {
-        Width: width,
-        Height: height,
+        Width: output_width,
+        Height: output_height,
         MipLevels: 1,
         ArraySize: 1,
         Format: DXGI_FORMAT_NV12,

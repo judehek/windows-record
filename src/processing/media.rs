@@ -11,8 +11,8 @@ pub unsafe fn create_sink_writer(
     output_path: &str,
     fps_num: u32,
     fps_den: u32,
-    s_width: u32,
-    s_height: u32,
+    output_width: u32,
+    output_height: u32,
     capture_audio: bool,
     capture_microphone: bool,
     video_bitrate: u32,
@@ -31,7 +31,7 @@ pub unsafe fn create_sink_writer(
     let mut current_stream_index = 0;
 
     // Configure video stream (always stream index 0)
-    configure_video_stream(&sink_writer, fps_num, fps_den, s_width, s_height, video_bitrate, encoder_guid)?;
+    configure_video_stream(&sink_writer, fps_num, fps_den, output_width, output_height, video_bitrate, encoder_guid)?;
     current_stream_index += 1;
 
     // Configure process audio stream
@@ -65,16 +65,16 @@ unsafe fn configure_video_stream(
     sink_writer: &IMFSinkWriter,
     fps_num: u32,
     fps_den: u32,
-    width: u32,
-    height: u32,
+    output_width: u32,
+    output_height: u32,
     video_bitrate: u32,
     encoder_guid: Option<GUID>,
 ) -> Result<()> {
     // Create output media type
-    let video_output_type = create_video_output_type(fps_num, fps_den, width, height)?;
+    let video_output_type = create_video_output_type(fps_num, fps_den, output_width, output_height)?;
 
     // Create input media type
-    let video_input_type = create_video_input_type(fps_num, fps_den, width, height)?;
+    let video_input_type = create_video_input_type(fps_num, fps_den, output_width, output_height)?;
 
     // Configure encoder
     let config_attrs = create_encoder_config(video_bitrate)?;
@@ -111,8 +111,8 @@ unsafe fn configure_audio_stream(
 unsafe fn create_video_output_type(
     fps_num: u32,
     fps_den: u32,
-    width: u32,
-    height: u32,
+    output_width: u32,
+    output_height: u32,
 ) -> Result<IMFMediaType> {
     let output_type: IMFMediaType = MFCreateMediaType()?;
     output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
@@ -121,7 +121,7 @@ unsafe fn create_video_output_type(
         &MF_MT_FRAME_RATE,
         ((fps_num as u64) << 32) | (fps_den as u64),
     )?;
-    output_type.SetUINT64(&MF_MT_FRAME_SIZE, ((width as u64) << 32) | (height as u64))?;
+    output_type.SetUINT64(&MF_MT_FRAME_SIZE, ((output_width as u64) << 32) | (output_height as u64))?;
     output_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1 << 32) | 1u64)?;
     output_type.SetUINT32(
         &MF_MT_INTERLACE_MODE,
@@ -138,8 +138,8 @@ unsafe fn create_video_output_type(
 unsafe fn create_video_input_type(
     fps_num: u32,
     fps_den: u32,
-    width: u32,
-    height: u32,
+    output_width: u32,
+    output_height: u32,
 ) -> Result<IMFMediaType> {
     let input_type: IMFMediaType = MFCreateMediaType()?;
     input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
@@ -148,11 +148,11 @@ unsafe fn create_video_input_type(
         &MF_MT_FRAME_RATE,
         ((fps_num as u64) << 32) | (fps_den as u64),
     )?;
-    input_type.SetUINT64(&MF_MT_FRAME_SIZE, ((width as u64) << 32) | (height as u64))?;
+    input_type.SetUINT64(&MF_MT_FRAME_SIZE, ((output_width as u64) << 32) | (output_height as u64))?;
     input_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
     input_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
     input_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1u64 << 32) | 1u64)?;
-    input_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, width as u32)?;
+    input_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, output_width as u32)?;
 
     Ok(input_type)
 }
