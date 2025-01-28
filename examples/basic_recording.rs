@@ -16,7 +16,7 @@ fn main() -> Result<()> {
         .capture_microphone(false)
         .debug_mode(true)  // Enables logging
         .output_path("output.mp4")
-        .video_bitrate(2000000)
+        .video_bitrate(5000000)
         .build();
 
     let recorder = Recorder::new(config)?

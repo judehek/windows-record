@@ -18,6 +18,19 @@ pub unsafe fn setup_video_converter(
     let converter: IMFTransform =
         CoCreateInstance(&CLSID_VideoProcessorMFT, None, CLSCTX_INPROC_SERVER)?;
 
+    // Set output type first (REQUIRED)
+    let output_type: IMFMediaType = MFCreateMediaType()?;
+    output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+    output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+    output_type.SetUINT32(
+        &MF_MT_INTERLACE_MODE,
+        MFVideoInterlace_Progressive.0.try_into().unwrap(),
+    )?;
+    output_type.SetUINT64(&MF_MT_FRAME_SIZE, ((output_width as u64) << 32) | (output_height as u64))?;
+    output_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, output_width as u32)?;
+    output_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1 << 32) | 1)?;
+    converter.SetOutputType(0, &output_type, 0)?;
+    
     // Set input media type (BGRA)
     let input_type: IMFMediaType = MFCreateMediaType()?;
     input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
@@ -30,19 +43,6 @@ pub unsafe fn setup_video_converter(
     input_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1 << 32) | 1)?;
     input_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, (input_width * 4) as u32)?;
     converter.SetInputType(0, &input_type, 0)?;
-
-    // Set output media type (NV12)
-    let output_type: IMFMediaType = MFCreateMediaType()?;
-    output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-    output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
-    output_type.SetUINT32(
-        &MF_MT_INTERLACE_MODE,
-        MFVideoInterlace_Progressive.0.try_into().unwrap(),
-    )?;
-    output_type.SetUINT64(&MF_MT_FRAME_SIZE, ((output_width as u64) << 32) | (output_height as u64))?;
-    output_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, output_width as u32)?;
-    output_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1 << 32) | 1)?;
-    converter.SetOutputType(0, &output_type, 0)?;
 
     Ok(converter)
 }
