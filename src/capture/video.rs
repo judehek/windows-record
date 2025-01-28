@@ -148,7 +148,7 @@ unsafe fn process_frame(
     let foreground_window = GetForegroundWindow();
     let is_target_window = foreground_window == hwnd;
 
-    duplication.AcquireNextFrame(100, &mut info, &mut resource)?;
+    duplication.AcquireNextFrame(16, &mut info, &mut resource)?;
 
     let context = context_mutex.lock().unwrap();
     if let Some(resource) = resource {
