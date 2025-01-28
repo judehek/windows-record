@@ -126,33 +126,3 @@ unsafe fn create_nv12_output(
 
     Ok((nv12_texture, output_sample))
 }
-
-unsafe fn process_frame(
-    converter: &IMFTransform,
-    input_sample: &IMFSample,
-    output_sample: &IMFSample,
-) -> Result<()> {
-    converter.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
-    converter.ProcessInput(0, input_sample, 0)?;
-    converter.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
-
-    let mut output = MFT_OUTPUT_DATA_BUFFER {
-        pSample: ManuallyDrop::new(Some(output_sample.clone())),
-        dwStatus: 0,
-        pEvents: ManuallyDrop::new(None),
-        dwStreamID: 0,
-    };
-
-    let mut status: u32 = 0;
-    let result = converter.ProcessOutput(0, std::slice::from_mut(&mut output), &mut status);
-
-    ManuallyDrop::drop(&mut output.pEvents);
-    ManuallyDrop::into_inner(output.pSample);
-
-    if let Err(e) = result {
-        error!("Frame processing failed: {:?}", e);
-        return Err(e);
-    }
-
-    Ok(())
-}

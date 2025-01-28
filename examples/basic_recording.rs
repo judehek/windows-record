@@ -4,13 +4,13 @@ use win_recorder::{Recorder, Result};
 
 fn main() -> Result<()> {
     env::set_var("RUST_BACKTRACE", "full");
-    env::set_var("RUST_LOG", "info");
+    env::set_var("RUST_LOG", "debug");
     env_logger::init(); // Initialize logging
 
     // Create recorder using builder pattern
     let config = Recorder::builder()
         .fps(30, 1)
-        .dimensions(1920, 1080)
+        .dimensions(2560, 1440)
         .capture_audio(true)
         .capture_microphone(true)
         .debug_mode(true)  // Enables logging
