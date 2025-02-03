@@ -10,13 +10,12 @@ fn main() -> Result<()> {
     // Create recorder using builder pattern
     let config = Recorder::builder()
         .fps(30, 1)
-        .input_dimensions(2560, 1440)
-        .output_dimensions(2560, 1440)
+        .input_dimensions(1920, 1080)
+        .output_dimensions(1920, 1080)
         .capture_audio(true)
         .capture_microphone(false)
         .debug_mode(true)  // Enables logging
         .output_path("output.mp4")
-        .video_bitrate(5000000)
         .build();
 
     let recorder = Recorder::new(config)?
