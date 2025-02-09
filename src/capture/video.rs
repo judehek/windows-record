@@ -233,9 +233,9 @@ unsafe fn create_staging_texture(
             Count: 1,
             Quality: 0,
         },
-        Usage: D3D11_USAGE_STAGING,
-        BindFlags: D3D11_BIND_FLAG(0),
-        CPUAccessFlags: D3D11_CPU_ACCESS_READ,
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE,
+        CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(0),
         MiscFlags: D3D11_RESOURCE_MISC_FLAG(0),
     };
 
