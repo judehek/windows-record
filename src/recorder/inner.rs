@@ -104,11 +104,13 @@ impl RecorderInner {
             let rec_clone = recording.clone();
             let dev_clone = device.clone();
             let barrier_clone = barrier.clone();
+            let process_name_clone = process_name.to_string(); // Clone for thread ownership
             collect_video_handle = Some(std::thread::spawn(move || {
                 collect_frames(
                     sender_video,
                     rec_clone,
                     hwnd,
+                    &process_name_clone, // Pass process name for window tracking
                     fps_num,
                     fps_den,
                     input_width,

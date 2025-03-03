@@ -13,8 +13,77 @@ use windows::Win32::System::Threading::*;
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 use super::dxgi::{create_blank_dxgi_texture, setup_dxgi_duplication};
+use super::window::{find_window_by_substring, is_window_valid, get_window_title};
 use crate::processing::media::create_dxgi_sample;
 use crate::types::{SendableSample, TexturePool};
+
+/// Struct to manage window target state
+struct WindowTracker {
+    /// The original target window handle
+    hwnd: HWND,
+    /// The process name to search for if the window handle becomes invalid
+    process_name: String,
+    /// The last time we checked if the window is still valid
+    last_check: Instant,
+    /// Time between validity checks (to avoid checking every frame)
+    check_interval: Duration,
+    /// Whether we have seen the window in focus at least once
+    ever_focused: bool,
+}
+
+impl WindowTracker {
+    /// Create a new window tracker
+    fn new(hwnd: HWND, process_name: &str) -> Self {
+        Self {
+            hwnd,
+            process_name: process_name.to_string(),
+            last_check: Instant::now(),
+            check_interval: Duration::from_secs(2), // Check every 2 seconds
+            ever_focused: false,
+        }
+    }
+    
+    /// Check if the window is currently in focus
+    fn is_focused(&mut self) -> bool {
+        let foreground_window = unsafe { GetForegroundWindow() };
+        let is_target_window = foreground_window == self.hwnd;
+        
+        if is_target_window {
+            // If window is now in focus, remember this
+            self.ever_focused = true;
+        }
+        
+        is_target_window
+    }
+    
+    /// Ensure the window handle is still valid, and try to find it again if needed
+    fn ensure_valid_window(&mut self) -> bool {
+        let now = Instant::now();
+        
+        // Don't check too frequently
+        if now.duration_since(self.last_check) < self.check_interval {
+            return true;
+        }
+        
+        self.last_check = now;
+        
+        // If the window is still valid, we're good
+        if is_window_valid(self.hwnd) {
+            return true;
+        }
+        
+        // If not, try to find the window again
+        debug!("Window handle no longer valid, attempting to find '{}' again", self.process_name);
+        if let Some(new_hwnd) = find_window_by_substring(&self.process_name) {
+            debug!("Found window again with new handle: {:?}", new_hwnd);
+            self.hwnd = new_hwnd;
+            return true;
+        }
+        
+        debug!("Failed to find window '{}'", self.process_name);
+        false
+    }
+}
 
 #[derive(Debug)]
 enum FrameError {
@@ -39,6 +108,7 @@ pub unsafe fn collect_frames(
     send: Sender<SendableSample>,
     recording: Arc<AtomicBool>,
     hwnd: HWND,
+    process_name: &str, // Added process_name for window tracking
     fps_num: u32,
     fps_den: u32,
     input_width: u32,
@@ -47,8 +117,11 @@ pub unsafe fn collect_frames(
     device: Arc<ID3D11Device>,
     context_mutex: Arc<Mutex<ID3D11DeviceContext>>,
 ) -> Result<()> {
-    info!("Starting frame collection");
+    info!("Starting frame collection for window: '{}'", get_window_title(hwnd));
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+
+    // Create window tracker to handle focus and window validity
+    let mut window_tracker = WindowTracker::new(hwnd, process_name);
 
     let frame_duration = Duration::from_nanos(1_000_000_000 * fps_den as u64 / fps_num as u64);
     let mut next_frame_time = Instant::now();
@@ -78,6 +151,7 @@ pub unsafe fn collect_frames(
     )?;
     let texture_pool = Arc::new(texture_pool);
 
+    // Signal that we're ready
     started.wait();
 
     // Initialize duplication
@@ -87,7 +161,23 @@ pub unsafe fn collect_frames(
         spin_sleep::sleep(Duration::from_millis(50));
     }
     
+    // Main recording loop
     while recording.load(Ordering::Relaxed) {
+        // Periodically check if window is still valid
+        if !window_tracker.ensure_valid_window() {
+            // Window is no longer valid, try to find it again
+            warn!("Window no longer valid, attempting to find '{}'", process_name);
+            if let Some(new_hwnd) = find_window_by_substring(process_name) {
+                info!("Found window '{}' again, continuing recording", process_name);
+                window_tracker = WindowTracker::new(new_hwnd, process_name);
+            } else {
+                // Can't find window, wait and retry
+                warn!("Window '{}' not found, will retry", process_name);
+                spin_sleep::sleep(Duration::from_secs(1));
+                continue;
+            }
+        }
+
         // Ensure we have a valid duplication interface
         if duplication_result.is_err() {
             warn!("No valid duplication interface, attempting to create one");
@@ -105,7 +195,7 @@ pub unsafe fn collect_frames(
             &context_mutex,
             &staging_texture,
             &blank_texture,
-            hwnd,
+            &mut window_tracker,
             fps_num,
             &send,
             frame_count,
@@ -156,7 +246,7 @@ unsafe fn process_frame(
     context_mutex: &Arc<Mutex<ID3D11DeviceContext>>,
     staging_texture: &ID3D11Texture2D,
     blank_texture: &ID3D11Texture2D,
-    hwnd: HWND,
+    window_tracker: &mut WindowTracker, // Updated to take window_tracker instead of raw hwnd
     fps_num: u32,
     send: &Sender<SendableSample>,
     frame_count: u64,
@@ -164,13 +254,33 @@ unsafe fn process_frame(
     frame_duration: Duration,
     accumulated_delay: &mut Duration,
     num_duped: &mut u64,
-    texture_pool: &Arc<TexturePool>,
+    _texture_pool: &Arc<TexturePool>, // Unused for now, will be used for future optimizations
 ) -> std::result::Result<(), FrameError> {
     let mut resource: Option<IDXGIResource> = None;
     let mut info = windows::Win32::Graphics::Dxgi::DXGI_OUTDUPL_FRAME_INFO::default();
 
-    let foreground_window = GetForegroundWindow();
-    let is_target_window = foreground_window == hwnd;
+    // Check if window is focused using our tracker
+    let is_window_focused = window_tracker.is_focused();
+    
+    // Only show content when window is focused
+    // Note: We used to check "ever_focused" but that caused issues with alt-tabbing
+    let should_show_content = is_window_focused;
+    
+    // Log state changes for debugging
+    static mut LAST_FOCUS_STATE: Option<bool> = None;
+    let focus_changed = unsafe { LAST_FOCUS_STATE != Some(is_window_focused) };
+    
+    if focus_changed {
+        if is_window_focused {
+            info!("Window '{}' is now in focus - displaying window content", window_tracker.process_name);
+            if !window_tracker.ever_focused {
+                info!("Window focused for the first time - recording will now show content");
+            }
+        } else {
+            info!("Window '{}' lost focus - displaying black screen", window_tracker.process_name);
+        }
+        unsafe { LAST_FOCUS_STATE = Some(is_window_focused); }
+    }
 
     duplication.AcquireNextFrame(16, &mut info, &mut resource)?;
 
@@ -178,9 +288,11 @@ unsafe fn process_frame(
     if let Some(resource) = resource {
         let texture: ID3D11Texture2D = resource.cast()?;
 
-        if is_target_window {
+        if should_show_content {
+            // Window is in focus, display the actual content
             context.CopyResource(staging_texture, &texture);
         } else {
+            // Window is not in focus, display a black screen
             context.CopyResource(staging_texture, blank_texture);
         }
 
