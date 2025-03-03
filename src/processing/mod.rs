@@ -92,19 +92,19 @@ pub fn process_samples(
                         output_height
                     )?
                 };
-                debug!(
+                /*debug!(
                     "Video frame {} converted in {:?}",
                     frame_count,
                     start.elapsed()
-                );
+                );*/
 
                 let write_start = std::time::Instant::now();
                 unsafe { writer.0.WriteSample(video_stream_index, &converted)? };
-                debug!(
+                /*debug!(
                     "Video frame {} written in {:?}",
                     frame_count,
                     write_start.elapsed()
-                );
+                );*/
 
                 frame_count += 1;
                 if frame_count % 100 == 0 {
@@ -130,10 +130,10 @@ pub fn process_samples(
                         had_work = true;
                         let write_start = std::time::Instant::now();
                         unsafe { writer.0.WriteSample(stream_index, &*audio_samp.0)? };
-                        debug!(
+                        /*debug!(
                             "Process audio sample written in {:?}",
                             write_start.elapsed()
-                        );
+                        );*/
                     }
                     Err(TryRecvError::Empty) => {}
                     Err(e) => {

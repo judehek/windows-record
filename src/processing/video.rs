@@ -56,7 +56,7 @@ pub unsafe fn convert_bgra_to_nv12(
 ) -> Result<IMFSample> {
     let duration = in_sample.GetSampleDuration()?;
     let time = in_sample.GetSampleTime()?;
-    debug!("Processing frame at time: {}, duration: {}", time, duration);
+    //debug!("Processing frame at time: {}, duration: {}", time, duration);
 
     // Create NV12 texture and output sample
     let (nv12_texture, output_sample) = create_nv12_output(device, output_width, output_height)?;

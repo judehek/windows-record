@@ -108,7 +108,7 @@ pub unsafe fn collect_frames(
     send: Sender<SendableSample>,
     recording: Arc<AtomicBool>,
     hwnd: HWND,
-    process_name: &str, // Added process_name for window tracking
+    process_name: &str,
     fps_num: u32,
     fps_den: u32,
     input_width: u32,
@@ -177,7 +177,6 @@ pub unsafe fn collect_frames(
                 continue;
             }
         }
-
         // Ensure we have a valid duplication interface
         if duplication_result.is_err() {
             warn!("No valid duplication interface, attempting to create one");
@@ -207,7 +206,7 @@ pub unsafe fn collect_frames(
         ) {
             Ok(_) => {
                 frame_count += 1;
-                trace!("Collected frame {}", frame_count);
+                //trace!("Collected frame {}", frame_count);
             }
             Err(e) => match e {
                 FrameError::SendError(_) | FrameError::ChannelClosed => {
@@ -292,6 +291,7 @@ unsafe fn process_frame(
             // Window is in focus, display the actual content
             context.CopyResource(staging_texture, &texture);
         } else {
+            log::info!("copied blank texture resource instead of actual content");
             // Window is not in focus, display a black screen
             context.CopyResource(staging_texture, blank_texture);
         }
