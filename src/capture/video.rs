@@ -291,7 +291,6 @@ unsafe fn process_frame(
             // Window is in focus, display the actual content
             context.CopyResource(staging_texture, &texture);
         } else {
-            log::info!("copied blank texture resource instead of actual content");
             // Window is not in focus, display a black screen
             context.CopyResource(staging_texture, blank_texture);
         }
