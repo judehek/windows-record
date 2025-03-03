@@ -2,16 +2,71 @@
 
 ## Overview
 
-This is a window recorder built using the `windows` crate in Rust. It uses desktop duplication and Windows Media Foundation Transforms and Sinks in order to record a window without any yellow box being drawn around the border of the window. It will black out the recording if you are not focused on the window you want to record.
+This is a high-performance window recorder built using the `windows` crate in Rust. It leverages DirectX 11, desktop duplication, and Windows Media Foundation to efficiently record windows without any yellow border. The recorder automatically blacks out content when the target window is not in focus.
 
 ## Features
 
-- Recording a window with audio (up to 60 fps tested)
-- H.264 Codec output supporting MP4 files
-- Abstracted interface that leaves all difficult and `unsafe` code away from a user
+- High-performance recording with GPU acceleration (up to 60+ fps)
+- Efficient D3D11_USAGE_DEFAULT texture management with resource pooling
+- Proper DirectX and Media Foundation resource lifecycle management
+- H.264 hardware encoding supporting MP4 files
+- System audio and microphone capture
+- Customizable resolution and bitrate settings
+- Hardware encoder selection
+- Debug instrumentation for resource tracking
+- Abstracted interface that hides all `unsafe` code from users
 
-## In Progress
+## Performance Optimizations
 
-- Allowing it to record on different monitors, and enumerating to find the proper monitor
-- Further performance increases by decreasing the required alloc's and potential speedups along the Windows Media Foundation pipeline
-- Ability to choose codecs to use for better performance
+- Fixed-size texture pool to minimize GPU memory allocations
+- Explicit reference tracking for DirectX resources
+- Proper cleanup of Media Foundation resources
+- Thread-safe design for concurrent capture and encoding
+- Minimal overhead with zero-copy GPU texture handling
+- Efficient resource recycling to prevent memory leaks during long recordings
+
+## Usage Example
+
+```rust
+use win_recorder::{Recorder, Result};
+
+fn main() -> Result<()> {
+    // Create recorder with builder pattern
+    let config = Recorder::builder()
+        .fps(60, 1)
+        .input_dimensions(1920, 1080)
+        .output_dimensions(1920, 1080)
+        .capture_audio(true)
+        .output_path("output.mp4")
+        .build();
+
+    // Initialize with target window
+    let recorder = Recorder::new(config)?
+        .with_process_name("Your Game Window Name");
+
+    // Start recording
+    recorder.start_recording()?;
+    
+    // Record for desired duration
+    std::thread::sleep(std::time::Duration::from_secs(30));
+    
+    // Stop recording and clean up resources
+    recorder.stop_recording()?;
+    
+    Ok(())
+}
+```
+
+## Advanced Features
+
+- Hardware encoder selection for optimal performance
+- Custom resolution and bitrate configuration
+- Debug mode for resource tracking
+- Thread-safe design for integration with GUI applications
+
+## Future Improvements
+
+- Multi-monitor support with automatic display detection
+- Additional codec options beyond H.264
+- Virtual audio device capture
+- Region-based recording

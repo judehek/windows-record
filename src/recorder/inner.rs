@@ -204,7 +204,23 @@ impl RecorderInner {
 impl Drop for RecorderInner {
     fn drop(&mut self) {
         unsafe {
+            #[cfg(debug_assertions)]
+            log::info!("RecorderInner is being dropped, cleaning up resources");
+            
+            // Ensure recording flag is set to false to terminate threads
+            if self.recording.load(std::sync::atomic::Ordering::Relaxed) {
+                #[cfg(debug_assertions)]
+                log::warn!("Recording flag was still true during drop; setting to false");
+                self.recording.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            
+            #[cfg(debug_assertions)]
+            log::info!("Shutting down Media Foundation");
+            
             let _ = media::shutdown_media_foundation();
+            
+            #[cfg(debug_assertions)]
+            log::info!("RecorderInner cleanup complete");
         }
     }
 }
@@ -222,7 +238,15 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
 
     let mut device = None;
     let mut context = None;
-    let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_DEBUG;
+    
+    // Base flags always include BGRA support
+    let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+    
+    // In debug builds, try to use debug layer
+    #[cfg(debug_assertions)]
+    {
+        flags |= D3D11_CREATE_DEVICE_DEBUG;
+    }
 
     // Try to create device with debug layer first
     let result = D3D11CreateDevice(
@@ -265,6 +289,30 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     // Enable multi-threading
     let multithread: ID3D11Multithread = device.cast()?;
     multithread.SetMultithreadProtected(true);
+    
+    #[cfg(debug_assertions)]
+    {
+        // Try to enable resource tracking via debug interface
+        let mut debug: Option<ID3D11Debug> = None;
+        if device.QueryInterface(&mut debug).is_ok() {
+            if let Some(debug_ref) = &debug {
+                info!("D3D11 Debug interface available - resource tracking enabled");
+                
+                // Enable debug info tracking
+                let mut info_queue: Option<ID3D11InfoQueue> = None;
+                if device.QueryInterface(&mut info_queue).is_ok() {
+                    if let Some(info_queue) = &info_queue {
+                        // Configure info queue to break on D3D11 errors
+                        info_queue.SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, true);
+                        info_queue.SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, true);
+                        info!("D3D11 Info Queue configured for error tracking");
+                    }
+                }
+            }
+        } else {
+            info!("D3D11 Debug interface not available");
+        }
+    }
 
     Ok((device, context))
 }

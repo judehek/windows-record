@@ -77,13 +77,29 @@ pub unsafe fn convert_bgra_to_nv12(
     let mut status: u32 = 0;
 
     if let Err(e) = converter.ProcessOutput(0, output_slice, &mut status) {
+        // Properly release resources before returning the error
+        if let Some(sample) = ManuallyDrop::take(&mut output_slice[0].pSample) {
+            drop(sample);
+        }
+        ManuallyDrop::drop(&mut output_slice[0].pEvents);
+        // Release the texture
+        drop(nv12_texture);
         device.GetDeviceRemovedReason()?;
         return Err(e);
     }
 
+    // Properly release resources
     ManuallyDrop::drop(&mut output_slice[0].pEvents);
     let final_sample = ManuallyDrop::take(&mut output_slice[0].pSample)
         .ok_or(windows::core::Error::from_win32())?;
+    
+    // Make sure to copy the timestamp and duration from the input sample to the output sample
+    final_sample.SetSampleTime(time)?;
+    final_sample.SetSampleDuration(duration)?;
+    
+    // Release the texture as it's no longer needed
+    // The Media Foundation sample now owns the reference to the underlying surface
+    drop(nv12_texture);
 
     Ok(final_sample)
 }
@@ -122,9 +138,19 @@ unsafe fn create_nv12_output(
 
     // Cast to IDXGISurface instead of ID3D11Resource
     let nv12_surface: IDXGISurface = nv12_texture.cast()?;
+    
+    // Create a DXGI buffer from the surface
     let output_buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &nv12_surface, 0, FALSE)?;
 
+    // Add the buffer to the sample
     output_sample.AddBuffer(&output_buffer)?;
+    
+    // Explicitly release the surface reference after adding the buffer
+    // The buffer still maintains its reference to the underlying resource
+    drop(nv12_surface);
+    
+    // Also explicitly drop the buffer reference
+    drop(output_buffer);
 
     Ok((nv12_texture, output_sample))
 }

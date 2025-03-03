@@ -14,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 use super::dxgi::{create_blank_dxgi_texture, setup_dxgi_duplication};
 use crate::processing::media::create_dxgi_sample;
-use crate::types::SendableSample;
+use crate::types::{SendableSample, TexturePool};
 
 #[derive(Debug)]
 enum FrameError {
@@ -60,6 +60,24 @@ pub unsafe fn collect_frames(
     let staging_texture = create_staging_texture(&device, input_width, input_height)?;
     let (blank_texture, _blank_resource) = create_blank_dxgi_texture(&device, input_width, input_height)?;
 
+    // Initialize texture pool for reusable textures (for Media Foundation samples)
+    use windows::Win32::Graphics::Dxgi::Common::*;
+    use windows::Win32::Graphics::Direct3D11::*;
+
+    // Create a pool with capacity of 10 textures - adjust based on expected frame rate and processing time
+    let texture_pool = TexturePool::new(
+        device.clone(),
+        10, // Capacity
+        input_width,
+        input_height,
+        DXGI_FORMAT_B8G8R8A8_UNORM,
+        D3D11_USAGE_DEFAULT.0,
+        D3D11_BIND_SHADER_RESOURCE.0,
+        0, // CPU access flags
+        0, // Misc flags
+    )?;
+    let texture_pool = Arc::new(texture_pool);
+
     started.wait();
 
     // Initialize duplication
@@ -95,6 +113,7 @@ pub unsafe fn collect_frames(
             frame_duration,
             &mut accumulated_delay,
             &mut num_duped,
+            &texture_pool,
         ) {
             Ok(_) => {
                 frame_count += 1;
@@ -145,6 +164,7 @@ unsafe fn process_frame(
     frame_duration: Duration,
     accumulated_delay: &mut Duration,
     num_duped: &mut u64,
+    texture_pool: &Arc<TexturePool>,
 ) -> std::result::Result<(), FrameError> {
     let mut resource: Option<IDXGIResource> = None;
     let mut info = windows::Win32::Graphics::Dxgi::DXGI_OUTDUPL_FRAME_INFO::default();
@@ -164,6 +184,8 @@ unsafe fn process_frame(
             context.CopyResource(staging_texture, blank_texture);
         }
 
+        // Explicitly release the texture before releasing the frame
+        drop(texture);
         duplication.ReleaseFrame()?;
     }
     drop(context);
@@ -194,10 +216,15 @@ unsafe fn send_frame(
     frame_count: u64,
     send: &Sender<SendableSample>,
 ) -> Result<()> {
+    // Create a Media Foundation sample from the texture
     let samp = create_dxgi_sample(texture, fps_num)?;
     samp.SetSampleTime((frame_count as i64 * 10_000_000i64 / fps_num as i64) as i64)?;
+    
+    // Wrap the sample in an Arc for thread-safety
+    // The Arc will ensure the sample is properly released when all references are gone
     send.send(SendableSample(Arc::new(samp)))
         .map_err(|_| Error::from_win32())?;
+    
     Ok(())
 }
 
