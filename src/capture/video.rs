@@ -90,8 +90,10 @@ enum FrameError {
     SendError(SendError<SendableSample>),
     WindowsError(WindowsError),
     ChannelClosed,
+    TexturePoolError, // Simple variant without associated data
 }
 
+// Keep your existing impls unchanged
 impl From<SendError<SendableSample>> for FrameError {
     fn from(err: SendError<SendableSample>) -> Self {
         FrameError::SendError(err)
@@ -229,6 +231,11 @@ pub unsafe fn collect_frames(
                     // For other errors, return as before
                     return Err(e);
                 }
+                FrameError::TexturePoolError => {
+                    // Handle texture pool error - log and continue
+                    warn!("Texture pool error occurred, trying to continue");
+                    continue;
+                }
             },
         }
     }
@@ -245,7 +252,7 @@ unsafe fn process_frame(
     context_mutex: &Arc<Mutex<ID3D11DeviceContext>>,
     staging_texture: &ID3D11Texture2D,
     blank_texture: &ID3D11Texture2D,
-    window_tracker: &mut WindowTracker, // Updated to take window_tracker instead of raw hwnd
+    window_tracker: &mut WindowTracker,
     fps_num: u32,
     send: &Sender<SendableSample>,
     frame_count: u64,
@@ -253,16 +260,15 @@ unsafe fn process_frame(
     frame_duration: Duration,
     accumulated_delay: &mut Duration,
     num_duped: &mut u64,
-    _texture_pool: &Arc<TexturePool>, // Unused for now, will be used for future optimizations
+    texture_pool: &Arc<TexturePool>, // Now we'll use this
 ) -> std::result::Result<(), FrameError> {
     let mut resource: Option<IDXGIResource> = None;
     let mut info = windows::Win32::Graphics::Dxgi::DXGI_OUTDUPL_FRAME_INFO::default();
-
+    
     // Check if window is focused using our tracker
     let is_window_focused = window_tracker.is_focused();
     
     // Only show content when window is focused
-    // Note: We used to check "ever_focused" but that caused issues with alt-tabbing
     let should_show_content = is_window_focused;
     
     // Log state changes for debugging
@@ -280,27 +286,43 @@ unsafe fn process_frame(
         }
         unsafe { LAST_FOCUS_STATE = Some(is_window_focused); }
     }
-
+    
     duplication.AcquireNextFrame(16, &mut info, &mut resource)?;
-
+    
     let context = context_mutex.lock().unwrap();
+    
     if let Some(resource) = resource {
-        let texture: ID3D11Texture2D = resource.cast()?;
-
+        // Acquire a texture from the pool rather than creating a new one every time
+        let pooled_texture = texture_pool.acquire().map_err(|e| {
+            log::error!("Failed to acquire texture from pool: {:?}", e);
+            // Convert to WindowsError first if needed, or just use TexturePoolError variant
+            FrameError::TexturePoolError
+        })?;
+        
+        // Get the source texture from the resource
+        let source_texture: ID3D11Texture2D = resource.cast()?;
+        
         if should_show_content {
-            // Window is in focus, display the actual content
-            context.CopyResource(staging_texture, &texture);
+            // Copy content from source to our pooled texture
+            context.CopyResource(&pooled_texture, &source_texture);
+            
+            // Then copy from pooled to staging texture
+            context.CopyResource(staging_texture, &pooled_texture);
         } else {
-            // Window is not in focus, display a black screen
+            // Window not in focus, just use blank screen
             context.CopyResource(staging_texture, blank_texture);
         }
-
-        // Explicitly release the texture before releasing the frame
-        drop(texture);
+        
+        // Release the original texture and frame
+        drop(source_texture);
         duplication.ReleaseFrame()?;
+        
+        // Return the pooled texture to the pool when done
+        texture_pool.release(pooled_texture);
     }
+    
     drop(context);
-
+    
     // Handle frame timing and duplication
     while *accumulated_delay >= frame_duration {
         debug!("Duping a frame to catch up");
@@ -310,14 +332,14 @@ unsafe fn process_frame(
         *accumulated_delay -= frame_duration;
         *num_duped += 1;
     }
-
+    
     send_frame(staging_texture, fps_num, frame_count, send)
         .map_err(|_| FrameError::ChannelClosed)?;
     *next_frame_time += frame_duration;
-
+    
     let current_time = Instant::now();
     handle_frame_timing(current_time, *next_frame_time, accumulated_delay);
-
+    
     Ok(())
 }
 
