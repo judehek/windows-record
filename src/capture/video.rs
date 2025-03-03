@@ -71,8 +71,8 @@ pub unsafe fn collect_frames(
         input_width,
         input_height,
         DXGI_FORMAT_B8G8R8A8_UNORM,
-        D3D11_USAGE_DEFAULT.0,
-        D3D11_BIND_SHADER_RESOURCE.0,
+        D3D11_USAGE_DEFAULT.0.try_into().unwrap(),
+        D3D11_BIND_SHADER_RESOURCE.0.try_into().unwrap(),
         0, // CPU access flags
         0, // Misc flags
     )?;

@@ -291,12 +291,12 @@ pub unsafe fn shutdown_media_foundation() -> Result<()> {
     log::info!("Shutting down Media Foundation and COM");
 
     // Clean up memory before shutting down
-    #[cfg(debug_assertions)]
+    /*#[cfg(debug_assertions)]
     {
         log::debug!("Running garbage collection before Media Foundation shutdown");
         // Force a GC to clean up any unreferenced resources
         std::mem::drop(std::mem::take_mut(&mut Vec::<()>::new()));
-    }
+    }*/
 
     MFShutdown()?;
     CoUninitialize();

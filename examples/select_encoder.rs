@@ -87,7 +87,7 @@ fn main() -> Result<()> {
     drop(recorder);
     
     // Force a GC to clean up any unreferenced resources
-    std::mem::drop(std::mem::take_mut(&mut Vec::<()>::new()));
+    //std::mem::drop(std::mem::take_mut(&mut Vec::<()>::new()));
     
     info!("Performance test complete - all resources properly cleaned up");
     info!("Output saved to ./output_perf_test.mp4");

@@ -59,7 +59,7 @@ fn main() -> Result<()> {
     drop(recorder);
     
     // Force a GC to clean up any unreferenced resources
-    std::mem::drop(std::mem::take_mut(&mut Vec::<()>::new()));
+    //std::mem::drop(std::mem::take_mut(&mut Vec::<()>::new()));
     
     info!("Application finished - all resources properly cleaned up");
     Ok(())

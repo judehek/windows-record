@@ -289,25 +289,19 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     // Enable multi-threading
     let multithread: ID3D11Multithread = device.cast()?;
     multithread.SetMultithreadProtected(true);
-    
+
     #[cfg(debug_assertions)]
     {
         // Try to enable resource tracking via debug interface
-        let mut debug: Option<ID3D11Debug> = None;
-        if device.QueryInterface(&mut debug).is_ok() {
-            if let Some(debug_ref) = &debug {
-                info!("D3D11 Debug interface available - resource tracking enabled");
-                
-                // Enable debug info tracking
-                let mut info_queue: Option<ID3D11InfoQueue> = None;
-                if device.QueryInterface(&mut info_queue).is_ok() {
-                    if let Some(info_queue) = &info_queue {
-                        // Configure info queue to break on D3D11 errors
-                        info_queue.SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, true);
-                        info_queue.SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, true);
-                        info!("D3D11 Info Queue configured for error tracking");
-                    }
-                }
+        if let Ok(_debug) = device.cast::<ID3D11Debug>() {
+            info!("D3D11 Debug interface available - resource tracking enabled");
+            
+            // Enable debug info tracking
+            if let Ok(info_queue) = device.cast::<ID3D11InfoQueue>() {
+                // Configure info queue to break on D3D11 errors
+                info_queue.SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, true)?;
+                info_queue.SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, true)?;
+                info!("D3D11 Info Queue configured for error tracking");
             }
         } else {
             info!("D3D11 Debug interface not available");

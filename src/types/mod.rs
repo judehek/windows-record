@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use log::{debug, trace};
+use log::{debug, trace, info};
 use windows::core::{Interface, Result};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -57,7 +57,7 @@ impl TexturePool {
             )? };
             
             #[cfg(debug_assertions)]
-            debug!("TexturePool: Created initial texture #{} at {:p}", i, &*texture);
+            debug!("TexturePool: Created initial texture #{} at {:p}", i, &texture as *const _);
             
             textures.push(texture);
         }
@@ -89,7 +89,7 @@ impl TexturePool {
         
         let texture = if let Some(texture) = textures.pop() {
             #[cfg(debug_assertions)]
-            trace!("TexturePool: Reusing texture from pool at {:p}", &*texture);
+            trace!("TexturePool: Reusing texture from pool at {:p}", &texture as *const _);
             texture
         } else {
             // If pool is empty, create a new texture
@@ -103,7 +103,7 @@ impl TexturePool {
             
             #[cfg(debug_assertions)] {
                 self.created_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                debug!("TexturePool: Created new texture at {:p}", &*texture);
+                debug!("TexturePool: Created new texture at {:p}", &texture as *const _);
             }
             
             texture
@@ -128,7 +128,7 @@ impl TexturePool {
     /// Return a texture to the pool for reuse
     pub fn release(&self, texture: ID3D11Texture2D) {
         #[cfg(debug_assertions)]
-        trace!("TexturePool: Returning texture to pool at {:p}", &*texture);
+        trace!("TexturePool: Returning texture to pool at {:p}", &texture as *const _);
         
         let mut textures = self.textures.lock().unwrap();
         textures.push(texture);
@@ -168,10 +168,10 @@ impl TexturePool {
                 Count: 1,
                 Quality: 0,
             },
-            Usage: D3D11_USAGE(usage),
-            BindFlags: D3D11_BIND_FLAG(bind_flags),
-            CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(cpu_access),
-            MiscFlags: D3D11_RESOURCE_MISC_FLAG(misc_flags),
+            Usage: D3D11_USAGE(usage as i32),
+            BindFlags: D3D11_BIND_FLAG(bind_flags as i32),
+            CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(cpu_access as i32),
+            MiscFlags: D3D11_RESOURCE_MISC_FLAG(misc_flags as i32),
         };
         
         let mut texture = None;
