@@ -8,12 +8,13 @@ use windows::core::Error;
 use windows::core::{ComInterface, Error as WindowsError, Result};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D};
-use windows::Win32::Graphics::Dxgi::{IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource};
+use windows::Win32::Graphics::Dxgi::{IDXGIOutputDuplication, IDXGIResource};
 use windows::Win32::System::Threading::*;
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 use super::dxgi::{create_blank_dxgi_texture, setup_dxgi_duplication};
 use super::window::{find_window_by_substring, is_window_valid, get_window_title};
+use crate::capture::dxgi::create_staging_texture;
 use crate::processing::media::create_dxgi_sample;
 use crate::types::{SendableSample, TexturePool};
 
@@ -260,7 +261,7 @@ unsafe fn process_frame(
     frame_duration: Duration,
     accumulated_delay: &mut Duration,
     num_duped: &mut u64,
-    texture_pool: &Arc<TexturePool>, // Now we'll use this
+    texture_pool: &Arc<TexturePool>,
 ) -> std::result::Result<(), FrameError> {
     let mut resource: Option<IDXGIResource> = None;
     let mut info = windows::Win32::Graphics::Dxgi::DXGI_OUTDUPL_FRAME_INFO::default();
@@ -373,33 +374,4 @@ fn handle_frame_timing(
         let sleep_time = next_frame_time.duration_since(current_time);
         spin_sleep::sleep(sleep_time);
     }
-}
-
-unsafe fn create_staging_texture(
-    device: &ID3D11Device,
-    input_width: u32,
-    input_height: u32,
-) -> Result<ID3D11Texture2D> {
-    use windows::Win32::Graphics::Direct3D11::*;
-    use windows::Win32::Graphics::Dxgi::Common::*;
-
-    let desc = D3D11_TEXTURE2D_DESC {
-        Width: input_width,
-        Height: input_height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE,
-        CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(0),
-        MiscFlags: D3D11_RESOURCE_MISC_FLAG(0),
-    };
-
-    let mut staging_texture = None;
-    device.CreateTexture2D(&desc, None, Some(&mut staging_texture))?;
-    Ok(staging_texture.unwrap())
 }
