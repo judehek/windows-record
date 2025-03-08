@@ -5,7 +5,7 @@ use win_recorder::{Recorder, Result};
 fn main() -> Result<()> {
     // Set up logging to see resource tracking in debug builds
     env::set_var("RUST_BACKTRACE", "full");
-    env::set_var("RUST_LOG", "debug,win_recorder=trace");
+    env::set_var("RUST_LOG", "debug,win_recorder=debug");
     env_logger::init(); 
 
     info!("OS: {}", env::consts::OS);
@@ -18,7 +18,8 @@ fn main() -> Result<()> {
         .input_dimensions(1920, 1080)  
         .output_dimensions(1920, 1080)
         .capture_audio(true)
-        .capture_microphone(false)
+        .capture_microphone(true)
+        .microphone_volume(1.0)
         .debug_mode(true)  // Enable debug logging
         .output_path("output.mp4")
         .build();

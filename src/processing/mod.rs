@@ -18,10 +18,10 @@ pub fn process_samples(
     rec_audio: Receiver<SendableSample>,
     rec_microphone: Receiver<SendableSample>,
     recording: Arc<AtomicBool>,
-    input_width: u32,   // Changed parameter name to be explicit
-    input_height: u32,  // Changed parameter name to be explicit
-    output_width: u32,  // Added output width
-    output_height: u32, // Added output height
+    input_width: u32,
+    input_height: u32,
+    output_width: u32,
+    output_height: u32,
     device: Arc<ID3D11Device>,
     capture_audio: bool,
     capture_microphone: bool,
@@ -130,10 +130,10 @@ pub fn process_samples(
                         had_work = true;
                         let write_start = std::time::Instant::now();
                         unsafe { writer.0.WriteSample(stream_index, &*audio_samp.0)? };
-                        /*debug!(
+                        debug!(
                             "Process audio sample written in {:?}",
                             write_start.elapsed()
-                        );*/
+                        );
                     }
                     Err(TryRecvError::Empty) => {}
                     Err(e) => {
