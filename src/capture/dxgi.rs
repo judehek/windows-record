@@ -38,9 +38,9 @@ pub unsafe fn create_blank_dxgi_texture(
             Quality: 0,
         },
         Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_FLAG(40),
+        BindFlags: D3D11_BIND_SHADER_RESOURCE,
         CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(0),
-        MiscFlags: D3D11_RESOURCE_MISC_FLAG(10496),
+        MiscFlags: D3D11_RESOURCE_MISC_FLAG(0),
     };
 
     let mut texture = None;

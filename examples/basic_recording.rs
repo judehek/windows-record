@@ -41,9 +41,9 @@ fn main() -> Result<()> {
         }
     }
 
-    // Record for 15 seconds - long enough to test memory usage over time
-    info!("Recording for 15 seconds...");
-    std::thread::sleep(Duration::from_secs(15));
+    // Record for 10 seconds - long enough to test memory usage over time
+    info!("Recording for 10 seconds...");
+    std::thread::sleep(Duration::from_secs(10));
     
     // Stop recording and properly clean up resources
     info!("Stopping recording");
