@@ -307,13 +307,23 @@ unsafe fn setup_microphone_client() -> Result<IAudioClient> {
         return Err(e);
     }
 
-    let mix_format_ptr = audio_client.GetMixFormat()?;
+    // Create a hard-coded format that matches the system audio format
+    let wave_format = WAVEFORMATEX {
+        wFormatTag: WAVE_FORMAT_PCM.try_into().unwrap(),
+        nChannels: 2,
+        nSamplesPerSec: 44100,
+        nAvgBytesPerSec: 176400,  // nSamplesPerSec * nBlockAlign (44100 * 4)
+        nBlockAlign: 4,           // nChannels * wBitsPerSample/8 (2 * 16/8)
+        wBitsPerSample: 16,
+        cbSize: 0,
+    };
+
     let init_result = audio_client.Initialize(
         AUDCLNT_SHAREMODE_SHARED,
         AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
         default_period * 2,
         0,
-        mix_format_ptr,
+        &wave_format,  // Use our hard-coded format instead of mix_format_ptr
         None,
     );
 

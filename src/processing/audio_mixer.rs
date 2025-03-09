@@ -185,33 +185,15 @@ impl AudioMixer {
         
         trace!("Output buffer - Address: {:p}, Max Length: {}", output_data, output_max_length);
         
-        // Mix based on bit depth
-        let mix_result = if self.bits_per_sample == 16 {
-            debug!("Mixing 16-bit PCM audio");
-            self.mix_pcm16(
-                sys_data, 
-                mic_data, 
-                output_data, 
-                sys_length, 
-                mic_length, 
-                output_size
-            )
-        } else if self.bits_per_sample == 32 {
-            debug!("Mixing 32-bit float PCM audio");
-            self.mix_pcm32(
-                sys_data, 
-                mic_data, 
-                output_data, 
-                sys_length, 
-                mic_length, 
-                output_size
-            )
-        } else {
-            warn!("Unsupported bit depth: {}, falling back to direct copy", self.bits_per_sample);
-            // Unsupported bit depth, just copy system audio as fallback
-            std::ptr::copy_nonoverlapping(sys_data, output_data, output_size);
-            Ok(())
-        };
+        // Mix the PCM audio
+        let mix_result = self.mix_pcm_audio(
+            sys_data, 
+            mic_data, 
+            output_data, 
+            sys_length, 
+            mic_length, 
+            output_size
+        );
         
         // Unlock buffers
         sys_buffer.Unlock()?;
@@ -250,321 +232,270 @@ impl AudioMixer {
         debug!("Successfully created mixed audio sample");
         Ok(output_sample)
     }
-
-    // Mix 16-bit PCM audio with proper resampling if needed
-    unsafe fn mix_pcm16(
+    
+    // Simplified mixing function that assumes both inputs are 16-bit PCM
+    unsafe fn mix_pcm_audio(
         &self,
-        sys_data: *mut u8,
-        mic_data: *mut u8,
-        output_data: *mut u8,
+        sys_data: *mut u8,     // System audio (16-bit PCM)
+        mic_data: *mut u8,     // Microphone audio (16-bit PCM)
+        output_data: *mut u8,  // Output buffer (16-bit PCM)
         sys_length: u32,
         mic_length: u32,
         output_size: usize
     ) -> Result<()> {
-        // Calculate frame counts
-        let sys_frame_count = sys_length as usize / (2 * self.channels as usize);
-        let mic_frame_count = mic_length as usize / (2 * self.channels as usize);
+        // Calculate frame counts (both should be 16-bit PCM)
+        let bytes_per_sample = 2; // 16-bit PCM = 2 bytes per sample
+        let sys_frame_count = sys_length as usize / (bytes_per_sample * self.channels as usize);
+        let mic_frame_count = mic_length as usize / (bytes_per_sample * self.channels as usize);
         
         debug!("Frame counts - System: {}, Microphone: {}", sys_frame_count, mic_frame_count);
         
-        // Convert raw pointers to slices for system audio
+        // Access the audio data as 16-bit PCM
         let sys_samples = std::slice::from_raw_parts(
-            sys_data as *const i16, 
+            sys_data as *const i16,
             sys_length as usize / 2
         );
         
-        // Check if first few system audio samples look valid
-        trace!("First 5 system audio samples: {:?}", 
-               &sys_samples.iter().take(5).collect::<Vec<&i16>>());
+        let mic_samples = std::slice::from_raw_parts(
+            mic_data as *const i16,
+            mic_length as usize / 2
+        );
         
-        // Temporary storage for resampled data
-        let mut resampled_mic_samples: Vec<i16>;
+        // Diagnostic information
+        if !sys_samples.is_empty() {
+            let sys_stats = calculate_stats_i16(&sys_samples[..std::cmp::min(1000, sys_samples.len())]);
+            debug!("SYSTEM AUDIO STATS - Min: {}, Max: {}, Avg: {:.1}, AbsMax: {}, NonZero: {:.1}%", 
+           sys_stats.min, sys_stats.max, sys_stats.avg, sys_stats.abs_max, sys_stats.percent_non_zero);
+        }
         
-        // Determine which mic samples to use (original or resampled)
+        if !mic_samples.is_empty() {
+            let mic_stats = calculate_stats_i16(&mic_samples[..std::cmp::min(1000, mic_samples.len())]);
+            debug!("MIC AUDIO STATS - Min: {}, Max: {}, Avg: {:.1}, AbsMax: {}, NonZero: {:.1}%", 
+                   mic_stats.min, mic_stats.max, mic_stats.avg, mic_stats.abs_max, mic_stats.percent_non_zero);
+        }
+        
+        // Resample microphone audio if needed
         let mic_samples_to_use = if mic_frame_count == sys_frame_count {
             debug!("No resampling needed for microphone audio");
-            let samples = std::slice::from_raw_parts(mic_data as *const i16, mic_length as usize / 2);
-            trace!("First 5 microphone audio samples: {:?}", 
-                   &samples.iter().take(5).collect::<Vec<&i16>>());
-            samples
+            mic_samples
         } else {
-            debug!("Resampling microphone audio (mic frames: {}, sys frames: {})", 
-                   mic_frame_count, sys_frame_count);
+            // Perform resampling
+            let resampled = self.resample_audio(
+                mic_data,
+                mic_length,
+                mic_frame_count,
+                sys_frame_count
+            )?;
             
-            // First convert i16 samples to f32 for the resampler
-            let mut mic_samples_f32 = vec![0.0f32; mic_length as usize / 2];
-            src_short_to_float_array(
-                mic_data as *const i16, 
-                mic_samples_f32.as_mut_ptr(), 
-                mic_length as i32 / 2
-            );
-            
-            trace!("First 5 mic samples converted to float: {:?}", 
-                   &mic_samples_f32.iter().take(5).collect::<Vec<&f32>>());
-            
-            // Calculate the src_ratio
-            let src_ratio = sys_frame_count as f64 / mic_frame_count as f64;
-            debug!("Resampling ratio: {:.4}", src_ratio);
-            
-            // Prepare output buffer for resampled data
-            let out_frames = sys_frame_count * self.channels as usize;
-            let mut resampled_f32 = vec![0.0f32; out_frames];
-            
-            // Create SRC_DATA structure for resampling
-            let mut src_data = SRC_DATA {
-                data_in: mic_samples_f32.as_ptr(),
-                data_out: resampled_f32.as_mut_ptr(),
-                input_frames: mic_frame_count as i32,
-                output_frames: sys_frame_count as i32,
-                input_frames_used: 0,
-                output_frames_gen: 0,
-                end_of_input: 1, // Last call
-                src_ratio: src_ratio,
-            };
-            
-            // Create resampler
-            let mut error = 0;
-            let src_state = src_new(SRC_SINC_BEST_QUALITY as i32, self.channels as i32, &mut error);
-            
-            if !src_state.is_null() {
-                debug!("Successfully created resampler");
-                // Process resampling
-                let error = src_process(src_state, &mut src_data);
-                
-                // Clean up
-                src_delete(src_state);
-                
-                if error == 0 {
-                    debug!("Resampling successful - Input frames used: {}, Output frames generated: {}", 
-                           src_data.input_frames_used, src_data.output_frames_gen);
-                    
-                    // Convert resampled float data back to i16
-                    resampled_mic_samples = vec![0i16; src_data.output_frames_gen as usize * self.channels as usize];
-                    src_float_to_short_array(
-                        resampled_f32.as_ptr(), 
-                        resampled_mic_samples.as_mut_ptr(), 
-                        src_data.output_frames_gen as i32 * self.channels as i32
-                    );
-                    
-                    trace!("First 5 resampled mic samples: {:?}", 
-                          &resampled_mic_samples.iter().take(5).collect::<Vec<&i16>>());
-                    
-                    &resampled_mic_samples
-                } else {
-                    warn!("Resampling failed with error code: {}, falling back to original", error);
-                    // Resampling failed, use original with caution
-                    let max_samples = std::cmp::min(mic_length, sys_length) as usize / 2;
-                    let samples = std::slice::from_raw_parts(mic_data as *const i16, max_samples);
-                    trace!("First 5 mic samples (fallback): {:?}", 
-                           &samples.iter().take(5).collect::<Vec<&i16>>());
-                    samples
-                }
+            if !resampled.is_empty() {
+                &resampled.clone()
             } else {
-                error!("Failed to create resampler, error code: {}", error);
-                // Resampler creation failed, use original with caution
+                // Fallback if resampling failed
+                debug!("Resampling failed, using a slice of the original data");
                 let max_samples = std::cmp::min(mic_length, sys_length) as usize / 2;
-                let samples = std::slice::from_raw_parts(mic_data as *const i16, max_samples);
-                trace!("First 5 mic samples (fallback after resampler creation failure): {:?}", 
-                       &samples.iter().take(5).collect::<Vec<&i16>>());
-                samples
+                &mic_samples[..max_samples]
             }
         };
         
-        // Get output as mutable slice
+        // Get output as mutable slice of i16
         let output_samples = std::slice::from_raw_parts_mut(
             output_data as *mut i16, 
             output_size / 2
         );
         
-        // Mix the audio: 70% system, 30% mic
-        let mix_len = std::cmp::min(sys_samples.len(), mic_samples_to_use.len());
-        debug!("Mixing {} samples", mix_len);
+        // Mix the audio (both PCM16)
+        let mix_len = std::cmp::min(
+            sys_samples.len(),
+            mic_samples_to_use.len()
+        );
         
-        // Check sample ranges before mixing
-        let sys_peak = sys_samples.iter()
-            .map(|&s| (s as i32).abs() as f32)
-            .fold(1.0f32, |a, b| a.max(b));
-        let mic_peak = mic_samples_to_use.iter()
-            .map(|&s| (s as i32).abs() as f32)
-            .fold(1.0f32, |a, b| a.max(b));
-
+        debug!("Mixing {} samples to PCM16 output", mix_len);
         
+        // Fixed mix ratios
+        let sys_ratio = 0.50;  // 65% system audio
+        let mic_ratio = 0.50;  // 35% microphone
+        
+        debug!("Using mix with System: {:.2}, Microphone: {:.2}", sys_ratio, mic_ratio);
+        
+        // Mix directly in integer space with scaled ratios
+        // Convert floating-point ratios to integer weights (out of 100)
+        let sys_weight = (sys_ratio * 100.0) as i32;
+        let mic_weight = (mic_ratio * 100.0) as i32;
+        
+        let mut clipped_count = 0;
         for i in 0..mix_len {
-            // Convert to float, mix, then back to i16 with clipping
-            let sys_val = (sys_samples[i] as f32) / sys_peak;
-            let mic_val = (mic_samples_to_use[i] as f32) / mic_peak;
+            // Get system and mic values
+            let sys_val = if i < sys_samples.len() { sys_samples[i] as i32 } else { 0 };
+            let mic_val = if i < mic_samples_to_use.len() { mic_samples_to_use[i] as i32 } else { 0 };
             
             // Mix with weights
-            let mixed_val = (sys_val * 0.7) + (mic_val * 0.3);
+            let mixed_val = (sys_val * sys_weight + mic_val * mic_weight) / 100;
+
+            if mixed_val < i16::MIN as i32 || mixed_val > i16::MAX as i32 {
+                clipped_count += 1;
+                if clipped_count <= 10 {  // Log only first 10 clipped samples
+                    trace!("CLIPPED: sample[{}] - sys={}, mic={}, mixed={}, clipped to={}", 
+                           i, sys_val, mic_val, mixed_val, 
+                           mixed_val.clamp(i16::MIN as i32, i16::MAX as i32));
+                }
+            }
             
-            output_samples[i] = (mixed_val * 32767.0).clamp(-32768.0, 32767.0) as i16;
-        }
-        
-        // If we don't have enough mic samples, fill the rest with system audio
-        if mix_len < sys_samples.len() {
-            debug!("Filling remaining {} samples with system audio", sys_samples.len() - mix_len);
-            for i in mix_len..sys_samples.len() {
-                output_samples[i] = sys_samples[i];
+            // Clamp to i16 range
+            let clamped_result = mixed_val.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            
+            // Write to output
+            if i < output_samples.len() {
+                output_samples[i] = clamped_result;
             }
         }
+
+        if clipped_count > 0 {
+            warn!("Audio clipping detected in {} of {} samples ({:.2}%)", 
+                  clipped_count, mix_len, (clipped_count as f64 / mix_len as f64) * 100.0);
+        }
+
+        let mixed_stats = calculate_stats_i16(&output_samples[..std::cmp::min(1000, output_samples.len())]);
+        debug!("MIXED AUDIO STATS - Min: {}, Max: {}, Avg: {:.1}, AbsMax: {}, NonZero: {:.1}%, Clipped: {:.2}%", 
+       mixed_stats.min, mixed_stats.max, mixed_stats.avg, mixed_stats.abs_max, 
+       mixed_stats.percent_non_zero, mixed_stats.percent_clipped);
         
-        // Check output sample range
-        let out_min_max = output_samples.iter().take(100)
-            .fold((i16::MAX, i16::MIN), |(min, max), &v| (min.min(v), max.max(v)));
-        debug!("Output sample range (first 100): {:?}", out_min_max);
+        // Fill any remaining output space with zeros
+        for i in mix_len..output_samples.len() {
+            output_samples[i] = 0;
+        }
         
         debug!("PCM16 mixing completed successfully");
         Ok(())
     }
     
-    // Mix 32-bit float PCM audio with proper resampling if needed
-    unsafe fn mix_pcm32(
+    // Helper function to resample audio
+    unsafe fn resample_audio(
         &self,
-        sys_data: *mut u8,
-        mic_data: *mut u8,
-        output_data: *mut u8,
-        sys_length: u32,
-        mic_length: u32,
-        output_size: usize
-    ) -> Result<()> {
-        // Calculate frame counts
-        let sys_frame_count = sys_length as usize / (4 * self.channels as usize);
-        let mic_frame_count = mic_length as usize / (4 * self.channels as usize);
+        input_data: *mut u8,
+        input_length: u32,
+        input_frames: usize,
+        output_frames: usize
+    ) -> Result<Vec<i16>> {
+        debug!("Resampling audio (input frames: {}, output frames: {})", 
+               input_frames, output_frames);
         
-        debug!("Frame counts - System: {}, Microphone: {}", sys_frame_count, mic_frame_count);
+        // Calculate resampling ratio
+        let src_ratio = output_frames as f64 / input_frames as f64;
+        debug!("Resampling ratio: {:.4}", src_ratio);
         
-        // Convert raw pointers to slices for system audio
-        let sys_samples = std::slice::from_raw_parts(
-            sys_data as *const f32, 
-            sys_length as usize / 4
+        // Convert PCM16 samples to float for the resampler
+        let mut input_samples_f32 = vec![0.0f32; input_length as usize / 2];
+        src_short_to_float_array(
+            input_data as *const i16, 
+            input_samples_f32.as_mut_ptr(), 
+            input_length as i32 / 2
         );
         
-        // Check if first few system audio samples look valid
-        trace!("First 5 system audio samples: {:?}", 
-               &sys_samples.iter().take(5).collect::<Vec<&f32>>());
+        // Prepare output buffer for resampled data
+        let out_samples = output_frames * self.channels as usize;
+        let mut resampled_f32 = vec![0.0f32; out_samples];
         
-        // Handle microphone audio (possibly resampling)
-        let mic_samples_f32 = std::slice::from_raw_parts(
-            mic_data as *const f32, 
-            mic_length as usize / 4
-        );
-        
-        trace!("First 5 microphone audio samples: {:?}", 
-               &mic_samples_f32.iter().take(5).collect::<Vec<&f32>>());
-        
-        // Temporary storage for resampled data
-        let mut resampled_f32: Vec<f32>;
-        
-        // Determine which mic samples to use (original or resampled)
-        let mic_samples_to_use = if mic_frame_count == sys_frame_count {
-            debug!("No resampling needed for microphone audio");
-            mic_samples_f32
-        } else {
-            debug!("Resampling microphone audio (mic frames: {}, sys frames: {})", 
-                   mic_frame_count, sys_frame_count);
-            
-            // Calculate the src_ratio
-            let src_ratio = sys_frame_count as f64 / mic_frame_count as f64;
-            debug!("Resampling ratio: {:.4}", src_ratio);
-            
-            // Prepare output buffer for resampled data
-            let out_frames = sys_frame_count * self.channels as usize;
-            resampled_f32 = vec![0.0f32; out_frames];
-            
-            // Create SRC_DATA structure for resampling
-            let mut src_data = SRC_DATA {
-                data_in: mic_samples_f32.as_ptr(),
-                data_out: resampled_f32.as_mut_ptr(),
-                input_frames: mic_frame_count as i32,
-                output_frames: sys_frame_count as i32,
-                input_frames_used: 0,
-                output_frames_gen: 0,
-                end_of_input: 1, // Last call
-                src_ratio: src_ratio,
-            };
-            
-            // Create resampler
-            let mut error = 0;
-            let src_state = src_new(SRC_SINC_BEST_QUALITY as i32, self.channels as i32, &mut error);
-            
-            if !src_state.is_null() {
-                debug!("Successfully created resampler");
-                // Process resampling
-                let error = src_process(src_state, &mut src_data);
-                
-                // Clean up
-                src_delete(src_state);
-                
-                if error == 0 {
-                    debug!("Resampling successful - Input frames used: {}, Output frames generated: {}", 
-                           src_data.input_frames_used, src_data.output_frames_gen);
-                    
-                    // Resize to actual output size
-                    resampled_f32.truncate(src_data.output_frames_gen as usize * self.channels as usize);
-                    trace!("First 5 resampled mic samples: {:?}", 
-                           &resampled_f32.iter().take(5).collect::<Vec<&f32>>());
-                    &resampled_f32
-                } else {
-                    warn!("Resampling failed with error code: {}, falling back to original", error);
-                    // Resampling failed, use original with caution
-                    let max_samples = std::cmp::min(mic_length, sys_length) as usize / 4;
-                    std::slice::from_raw_parts(mic_data as *const f32, max_samples)
-                }
-            } else {
-                error!("Failed to create resampler, error code: {}", error);
-                // Resampler creation failed, use original with caution
-                let max_samples = std::cmp::min(mic_length, sys_length) as usize / 4;
-                std::slice::from_raw_parts(mic_data as *const f32, max_samples)
-            }
+        // Create SRC_DATA structure for resampling
+        let mut src_data = SRC_DATA {
+            data_in: input_samples_f32.as_ptr(),
+            data_out: resampled_f32.as_mut_ptr(),
+            input_frames: input_frames as i32,
+            output_frames: output_frames as i32,
+            input_frames_used: 0,
+            output_frames_gen: 0,
+            end_of_input: 1, // Last call
+            src_ratio,
         };
         
-        // Get output as mutable slice
-        let output_samples = std::slice::from_raw_parts_mut(
-            output_data as *mut f32, 
-            output_size / 4
+        // Create resampler
+        let mut error = 0;
+        let src_state = src_new(SRC_SINC_BEST_QUALITY as i32, self.channels as i32, &mut error);
+        
+        if src_state.is_null() {
+            error!("Failed to create resampler, error code: {}", error);
+            return Ok(Vec::new());
+        }
+        
+        debug!("Successfully created resampler");
+        
+        // Process resampling
+        let error = src_process(src_state, &mut src_data);
+        
+        // Clean up
+        src_delete(src_state);
+        
+        if error != 0 {
+            warn!("Resampling failed with error code: {}", error);
+            return Ok(Vec::new());
+        }
+        
+        debug!("Resampling successful - Input frames used: {}, Output frames generated: {}", 
+               src_data.input_frames_used, src_data.output_frames_gen);
+        
+        // Convert resampled float data back to i16
+        let mut resampled_i16 = vec![0i16; src_data.output_frames_gen as usize * self.channels as usize];
+        src_float_to_short_array(
+            resampled_f32.as_ptr(), 
+            resampled_i16.as_mut_ptr(), 
+            src_data.output_frames_gen as i32 * self.channels as i32
         );
         
-        // Mix the audio: 70% system, 30% mic
-        let mix_len = std::cmp::min(sys_samples.len(), mic_samples_to_use.len());
-        debug!("Mixing {} samples", mix_len);
+        Ok(resampled_i16)
+    }
+}
+
+// Helper struct for audio statistics
+struct AudioStats {
+    min: i16,
+    max: i16,
+    avg: f64,
+    abs_max: i16,
+    percent_non_zero: f64,
+    percent_clipped: f64,
+}
+
+// Helper function to calculate stats from i16 samples
+fn calculate_stats_i16(samples: &[i16]) -> AudioStats {
+    let mut min = i16::MAX;
+    let mut max = i16::MIN;
+    let mut sum: i64 = 0;
+    let mut abs_max: i16 = 0;
+    let mut non_zero = 0;
+    let mut clipped = 0;  // Count samples at or very near the limits
+    
+    let clip_threshold = 32700;  // Very close to i16::MAX (32767)
+    
+    for &s in samples {
+        sum += s as i64;
+        if s < min { min = s; }
+        if s > max { max = s; }
         
-        // Check sample ranges before mixing
-        let sys_min_max = sys_samples.iter().take(100)
-            .fold((f32::MAX, f32::MIN), |(min, max), &v| (min.min(v), max.max(v)));
-        let mic_min_max = mic_samples_to_use.iter().take(100)
-            .fold((f32::MAX, f32::MIN), |(min, max), &v| (min.min(v), max.max(v)));
-        debug!("Sample ranges (first 100) - System: {:?}, Microphone: {:?}", sys_min_max, mic_min_max);
+        // Safe abs calculation that handles i16::MIN
+        let abs_s = if s == i16::MIN { 
+            32767 // Closest we can get to abs(i16::MIN) without overflow
+        } else { 
+            s.abs()
+        };
         
-        for i in 0..mix_len {
-            // Mix with weights and clip
-            let mixed_val = (sys_samples[i] * 0.7) + (mic_samples_to_use[i] * 0.3);
-            
-            // Clip to [-1.0, 1.0]
-            output_samples[i] = if mixed_val > 1.0 {
-                trace!("Clipping at index {}: {}", i, mixed_val);
-                1.0
-            } else if mixed_val < -1.0 {
-                trace!("Clipping at index {}: {}", i, mixed_val);
-                -1.0
-            } else {
-                mixed_val
-            };
+        if abs_s > abs_max { abs_max = abs_s; }
+        if s != 0 { non_zero += 1; }
+        
+        // Check for clipping (values very close to limits)
+        if abs_s >= clip_threshold {
+            clipped += 1;
         }
-        
-        // If we don't have enough mic samples, fill the rest with system audio
-        if mix_len < sys_samples.len() {
-            debug!("Filling remaining {} samples with system audio", sys_samples.len() - mix_len);
-            for i in mix_len..sys_samples.len() {
-                output_samples[i] = sys_samples[i];
-            }
-        }
-        
-        // Check output sample range
-        let out_min_max = output_samples.iter().take(100)
-            .fold((f32::MAX, f32::MIN), |(min, max), &v| (min.min(v), max.max(v)));
-        debug!("Output sample range (first 100): {:?}", out_min_max);
-        
-        debug!("PCM32 mixing completed successfully");
-        Ok(())
+    }
+    
+    let avg = sum as f64 / samples.len() as f64;
+    let percent_non_zero = (non_zero as f64 / samples.len() as f64) * 100.0;
+    let percent_clipped = (clipped as f64 / samples.len() as f64) * 100.0;
+    
+    AudioStats {
+        min,
+        max,
+        avg,
+        abs_max,
+        percent_non_zero,
+        percent_clipped
     }
 }
