@@ -416,17 +416,6 @@ impl AudioMixer {
         debug!("PCM16 mixing completed successfully");
         Ok(())
     }
-
-    fn soft_limit(x: f32) -> f32 {
-        // Apply a gentle tanh-like curve
-        if x > 0.5 {
-            1.0 - 0.5 / (1.0 + x - 0.5)
-        } else if x < -0.5 {
-            -1.0 + 0.5 / (1.0 - x - 0.5)
-        } else {
-            x
-        }
-    }
     
     // Mix 32-bit float PCM audio with proper resampling if needed
     unsafe fn mix_pcm32(
