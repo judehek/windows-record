@@ -159,10 +159,6 @@ pub unsafe fn collect_frames(
 
     // Initialize duplication
     let mut duplication_result = setup_dxgi_duplication(&device);
-    if duplication_result.is_ok() {
-        // Add a small delay to ensure the duplication interface is ready
-        spin_sleep::sleep(Duration::from_millis(50));
-    }
     
     // Main recording loop
     while recording.load(Ordering::Relaxed) {
