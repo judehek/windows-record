@@ -13,7 +13,6 @@ use super::config::RecorderConfig;
 use crate::capture::{collect_audio, collect_frames, collect_microphone, find_window_by_substring};
 use crate::error::RecorderError;
 use crate::processing::{media, process_samples};
-use crate::recorder::utils::get_encoder_guid;
 use crate::types::{SendableSample, SendableWriter};
 
 pub struct RecorderInner {

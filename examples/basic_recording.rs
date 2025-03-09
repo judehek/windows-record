@@ -5,7 +5,7 @@ use win_recorder::{Recorder, Result};
 fn main() -> Result<()> {
     // Set up logging to see resource tracking in debug builds
     env::set_var("RUST_BACKTRACE", "full");
-    env::set_var("RUST_LOG", "debug,win_recorder=debug");
+    env::set_var("RUST_LOG", "trace,win_recorder=trace");
     env_logger::init(); 
 
     info!("OS: {}", env::consts::OS);
