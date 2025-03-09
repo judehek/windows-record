@@ -18,7 +18,7 @@ fn main() -> Result<()> {
         .input_dimensions(1920, 1080)  
         .output_dimensions(1920, 1080)
         .capture_audio(true)
-        .capture_microphone(false)
+        .capture_microphone(true)
         .microphone_volume(1.0)
         .debug_mode(true)  // Enable debug logging
         .output_path("output.mp4")
@@ -27,7 +27,7 @@ fn main() -> Result<()> {
     // Create the recorder with your target window name
     // For this example, use a window that's currently open on your system
     let recorder = Recorder::new(config)?
-        .with_process_name("Chrome");  // Change to match your target window
+        .with_process_name("League of Legends (TM) Client");  // Change to match your target window
 
     // Short delay before starting recording
     std::thread::sleep(Duration::from_secs(2));

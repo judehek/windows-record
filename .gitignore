@@ -5,3 +5,4 @@
 *.txt
 /logs
 ffmpeg.exe
+audio.wav

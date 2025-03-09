@@ -56,6 +56,7 @@ pub unsafe fn collect_microphone(
     send: Sender<SendableSample>,
     recording: Arc<AtomicBool>,
     started: Arc<Barrier>,
+    shared_start_qpc: Option<u64>,
 ) -> Result<()> {
     // Validate thread priority setting
     let priority_result = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
@@ -138,7 +139,26 @@ pub unsafe fn collect_microphone(
         info!("Invalid initial QPC value: {}", start_qpc_i64);
         return Err(E_FAIL.into());
     }
-    let start_qpc = start_qpc_i64 as u64;
+    let start_qpc = match shared_start_qpc {
+        Some(qpc) => {
+            info!("Using shared QPC start time: {}", qpc);
+            qpc
+        },
+        None => {
+            let mut start_qpc_i64: i64 = 0;
+            if !QueryPerformanceCounter(&mut start_qpc_i64).as_bool() {
+                info!("Failed to get initial QPC value");
+                return Err(E_FAIL.into());
+            }
+            if start_qpc_i64 <= 0 {
+                info!("Invalid initial QPC value: {}", start_qpc_i64);
+                return Err(E_FAIL.into());
+            }
+            let qpc = start_qpc_i64 as u64;
+            info!("Generated new QPC start time: {}", qpc);
+            qpc
+        }
+    };
     info!("Initial QPC value: {}", start_qpc);
 
     // Track timing statistics

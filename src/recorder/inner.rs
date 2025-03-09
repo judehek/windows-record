@@ -1,4 +1,5 @@
 use log::{error, info};
+use windows::Win32::System::Performance::QueryPerformanceCounter;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
@@ -120,12 +121,18 @@ impl RecorderInner {
                 )
             }));
 
+            let mut start_qpc_i64: i64 = 0;
+            unsafe {
+                QueryPerformanceCounter(&mut start_qpc_i64);
+            }
+            let shared_start_qpc = start_qpc_i64 as u64;
+
             // Start audio capture thread if enabled
             if capture_audio {
                 let rec_clone = recording.clone();
                 let barrier_clone = barrier.clone();
                 collect_audio_handle = Some(std::thread::spawn(move || {
-                    collect_audio(sender_audio, rec_clone, process_id, barrier_clone)
+                    collect_audio(sender_audio, rec_clone, process_id, barrier_clone, Some(shared_start_qpc))
                 }));
             }
 
@@ -134,7 +141,7 @@ impl RecorderInner {
                 let rec_clone = recording.clone();
                 let barrier_clone = barrier.clone();
                 collect_microphone_handle = Some(std::thread::spawn(move || {
-                    collect_microphone(sender_microphone, rec_clone, barrier_clone)
+                    collect_microphone(sender_microphone, rec_clone, barrier_clone, Some(shared_start_qpc))
                 }));
             }
 
