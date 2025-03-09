@@ -177,14 +177,14 @@ pub unsafe fn collect_frames(
             }
         }
         // Ensure we have a valid duplication interface
-        if duplication_result.is_err() {
+        /*if duplication_result.is_err() {
             warn!("No valid duplication interface, attempting to create one");
             duplication_result = setup_dxgi_duplication(&device);
             if duplication_result.is_err() {
                 spin_sleep::sleep(Duration::from_millis(100));
                 continue;
             }
-        }
+        }*/
         
         let duplication = duplication_result.as_ref().unwrap();
         

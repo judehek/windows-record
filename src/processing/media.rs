@@ -197,7 +197,7 @@ unsafe fn create_audio_output_type() -> Result<IMFMediaType> {
     output_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
     output_type.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, 44100)?;
     output_type.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, 2)?;
-    output_type.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 12000)?;
+    output_type.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 16000)?;
 
     Ok(output_type)
 }
