@@ -26,6 +26,8 @@ pub fn process_samples(
     device: Arc<ID3D11Device>,
     capture_audio: bool,
     capture_microphone: bool,
+    system_volume: Option<f32>,
+    microphone_volume: Option<f32>,
 ) -> Result<()> {
     info!("Starting sample processing");
 
@@ -52,8 +54,22 @@ pub fn process_samples(
     );
 
     // Create audio mixer if we need to mix audio
-    let mut audio_mixer = if capture_audio && capture_microphone {
-        Some(audio_mixer::AudioMixer::new(44100, 16, 2))
+    let mut audio_mixer = if capture_audio || capture_microphone {
+        let mut mixer = audio_mixer::AudioMixer::new(44100, 16, 2, capture_audio && capture_microphone);
+        
+        // Set the volume/gain levels from parameters, using default of 1.0 if None
+        let sys_vol = system_volume.unwrap_or(1.0);
+        let mic_vol = microphone_volume.unwrap_or(1.0);
+        
+        mixer.set_system_volume(sys_vol);
+        mixer.set_microphone_volume(mic_vol);
+        
+        info!(
+            "Audio mixer created with system gain: {:.2}, microphone gain: {:.2}",
+            sys_vol, mic_vol
+        );
+        
+        Some(mixer)
     } else {
         None
     };

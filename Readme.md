@@ -64,4 +64,4 @@ fn main() -> Result<()> {
 - More robust audio sync
 - Audio input selection
 - Allowing recording system audio vs single window
-- The wave audio wave format is currently hard coded
+- The wave audio wave format is currently hard coded (device agnostic)

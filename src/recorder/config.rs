@@ -94,7 +94,6 @@ impl RecorderConfigBuilder {
         self
     }
 
-    // Updated dimension methods
     pub fn input_dimensions(mut self, width: u32, height: u32) -> Self {
         self.config.input_width = width;
         self.config.input_height = height;

@@ -5,8 +5,8 @@ use win_recorder::{Recorder, Result};
 fn main() -> Result<()> {
     // Set up logging to see resource tracking in debug builds
     env::set_var("RUST_BACKTRACE", "full");
-    env::set_var("RUST_LOG", "debug,win_recorder=debug");
-    env_logger::init(); 
+    env::set_var("RUST_LOG", "info,win_recorder=info");
+    env_logger::init();
 
     info!("OS: {}", env::consts::OS);
     info!("Architecture: {}", env::consts::ARCH);
@@ -20,6 +20,7 @@ fn main() -> Result<()> {
         .capture_audio(true)
         .capture_microphone(true)
         .microphone_volume(1.0)
+        .system_volume(1.0)
         .debug_mode(true)  // Enable debug logging
         .output_path("output.mp4")
         .build();
@@ -27,7 +28,7 @@ fn main() -> Result<()> {
     // Create the recorder with your target window name
     // For this example, use a window that's currently open on your system
     let recorder = Recorder::new(config)?
-        .with_process_name("Chrome");  // Change to match your target window
+        .with_process_name("League of Legends (TM) Client");  // Change to match your target window
 
     // Short delay before starting recording
     std::thread::sleep(Duration::from_secs(2));
@@ -42,9 +43,9 @@ fn main() -> Result<()> {
         }
     }
 
-    // Record for 10 seconds - long enough to test memory usage over time
+    // Record for 10 seconds
     info!("Recording for 10 seconds...");
-    std::thread::sleep(Duration::from_millis(3500));
+    std::thread::sleep(Duration::from_secs(10));
     
     // Stop recording and properly clean up resources
     info!("Stopping recording");
