@@ -122,7 +122,7 @@ pub fn process_samples(
                     
                     if let Some(mixer) = &mut audio_mixer {
                         // Add to mixer if we need to mix
-                        mixer.add_system_audio(audio_samp);
+                        unsafe { mixer.add_system_audio(audio_samp); }
                     } else if let Some(stream_index) = audio_stream_index {
                         // Write directly if no mixing needed
                         let write_start = std::time::Instant::now();
@@ -149,7 +149,7 @@ pub fn process_samples(
                     
                     if let Some(mixer) = &mut audio_mixer {
                         // Add to mixer if we need to mix
-                        mixer.add_microphone_audio(mic_samp);
+                        unsafe {mixer.add_microphone_audio(mic_samp); }
                     } else if let Some(stream_index) = audio_stream_index {
                         // Write directly if no mixing needed
                         let write_start = std::time::Instant::now();

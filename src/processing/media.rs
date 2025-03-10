@@ -5,6 +5,7 @@ use windows::core::{ComInterface, Result, GUID};
 use windows::Win32::Foundation::TRUE;
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
+use windows::Win32::Media::Audio::{WAVEFORMATEX, WAVE_FORMAT_PCM};
 use windows::Win32::Media::MediaFoundation::*;
 
 pub unsafe fn create_sink_writer(
@@ -63,10 +64,8 @@ unsafe fn configure_mixed_audio_stream(
 
 unsafe fn create_mixed_audio_input_type() -> Result<IMFMediaType> {
     let input_type: IMFMediaType = MFCreateMediaType()?;
-    let wav_format = windows::Win32::Media::Audio::WAVEFORMATEX {
-        wFormatTag: windows::Win32::Media::Audio::WAVE_FORMAT_PCM
-            .try_into()
-            .unwrap(),
+    let wave_format = WAVEFORMATEX {
+        wFormatTag: WAVE_FORMAT_PCM.try_into().unwrap(),
         nChannels: 2,
         nSamplesPerSec: 44100,
         nAvgBytesPerSec: 176400,
@@ -77,7 +76,7 @@ unsafe fn create_mixed_audio_input_type() -> Result<IMFMediaType> {
 
     MFInitMediaTypeFromWaveFormatEx(
         &input_type,
-        &wav_format,
+        &wave_format,
         std::mem::size_of::<windows::Win32::Media::Audio::WAVEFORMATEX>()
             .try_into()
             .unwrap(),

@@ -340,8 +340,8 @@ unsafe fn setup_microphone_client() -> Result<IAudioClient> {
 
     let init_result = audio_client.Initialize(
         AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
-        default_period * 2,
+        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+        300000,
         0,
         &wave_format,  // Use our hard-coded format instead of mix_format_ptr
         None,
@@ -436,9 +436,8 @@ unsafe fn create_microphone_sample(
 
     sample.AddBuffer(&media_buffer)?;
     sample.SetSampleTime(time_hns)?;
-    
-    // FIX: Scale duration by number of frames
-    sample.SetSampleDuration(num_frames as i64 * packet_duration_hns)?;
+
+    sample.SetSampleDuration(packet_duration_hns)?;
 
     Ok(sample)
 }

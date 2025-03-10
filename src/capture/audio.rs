@@ -214,7 +214,7 @@ pub unsafe fn collect_audio(
                         ) {
                             Ok(sample) => {
                                 if let Err(e) = send.send(SendableSample(Arc::new(sample))) {
-                                    info!("Failed to send audio sample: {:?}", e);
+                                    info!("Failed to send audio sample, receiver likely dropped: {:?}", e);
                                     return Err(E_FAIL.into());
                                 }
                             }
@@ -296,8 +296,8 @@ unsafe fn setup_audio_client(proc_id: u32, wave_format: &WAVEFORMATEX) -> Result
 
     audio_client.Initialize(
         AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-        0,
+        AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+        300000,
         0,
         wave_format,
         None,
@@ -306,24 +306,7 @@ unsafe fn setup_audio_client(proc_id: u32, wave_format: &WAVEFORMATEX) -> Result
     Ok(audio_client)
 }
 
-unsafe fn get_audio_buffer(capture_client: &IAudioCaptureClient) -> Result<(*mut u8, u32, u32)> {
-    let mut buffer = ptr::null_mut();
-    let mut num_frames_available = 0;
-    let mut flags = 0;
-    let mut device_position = 0;
-    let mut qpc_position: u64 = 0;
-
-    capture_client.GetBuffer(
-        &mut buffer,
-        &mut num_frames_available,
-        &mut flags,
-        Some(&mut device_position),
-        Some(&mut qpc_position as *mut u64),
-    )?;
-
-    Ok((buffer, num_frames_available, flags))
-}
-
+// Updated create_audio_sample to match microphone code's buffer handling
 unsafe fn create_audio_sample(
     buffer: *mut u8,
     num_frames: u32,
@@ -331,30 +314,84 @@ unsafe fn create_audio_sample(
     time_hns: i64,
     packet_duration_hns: i64,
 ) -> Result<IMFSample> {
-    let buffer_size = num_frames as usize * wave_format.nBlockAlign as usize;
-    let audio_data = std::slice::from_raw_parts(buffer, buffer_size);
+    if buffer.is_null() {
+        return Err(E_POINTER.into());
+    }
 
-    let sample: IMFSample = MFCreateSample()?;
-    let media_buffer: IMFMediaBuffer = MFCreateMemoryBuffer(buffer_size as u32)?;
+    let bytes_per_sample = wave_format.wBitsPerSample as usize / 8;
+    let num_channels = wave_format.nChannels as usize;
+    let block_align = wave_format.nBlockAlign as usize;
 
-    let mut buffer_ptr: *mut u8 = ptr::null_mut();
-    let mut max_length = 0;
-    let mut current_length = 0;
+    let buffer_size = num_frames as usize * block_align;
+
+    let sample: IMFSample = MFCreateSample()?.into();
+    let media_buffer: IMFMediaBuffer = MFCreateMemoryBuffer(buffer_size as u32)?.into();
+
+    let mut buffer_data = std::ptr::null_mut();
+    let mut max_length = 0u32;
+    let mut current_length = 0u32;
 
     media_buffer.Lock(
-        &mut buffer_ptr,
-        Some(&mut max_length),
-        Some(&mut current_length),
+        &mut buffer_data,
+        Some(&mut max_length as *mut u32),
+        Some(&mut current_length as *mut u32),
     )?;
-    ptr::copy_nonoverlapping(audio_data.as_ptr(), buffer_ptr, buffer_size);
+
+    // Format-specific processing based on bit depth
+    if wave_format.wBitsPerSample == 32 {
+        // 32-bit float handling
+        let src = std::slice::from_raw_parts(
+            buffer as *const f32,
+            num_frames as usize * num_channels,
+        );
+        let dst = std::slice::from_raw_parts_mut(
+            buffer_data as *mut f32,
+            num_frames as usize * num_channels,
+        );
+
+        // Copy the samples
+        std::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len());
+    } else if wave_format.wBitsPerSample == 16 {
+        // 16-bit integer handling
+        let src = std::slice::from_raw_parts(
+            buffer as *const i16,
+            num_frames as usize * num_channels,
+        );
+        let dst = std::slice::from_raw_parts_mut(
+            buffer_data as *mut i16,
+            num_frames as usize * num_channels,
+        );
+
+        // For stereo, interleave both channels properly
+        if num_channels == 2 {
+            for i in 0..num_frames as usize {
+                for c in 0..num_channels {
+                    dst[i * num_channels + c] = src[i * num_channels + c];
+                }
+            }
+
+            // Debug first few frames
+            if num_frames > 0 {
+                debug!(
+                    "First few audio frames (L/R pairs): {:?}",
+                    &src[..std::cmp::min(8 * num_channels, src.len())]
+                );
+            }
+        } else {
+            // Single channel, straight copy
+            std::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len());
+        }
+    } else {
+        // For non-16-bit and non-32-bit formats, fall back to byte copy
+        std::ptr::copy_nonoverlapping(buffer, buffer_data, buffer_size);
+    }
+
     media_buffer.SetCurrentLength(buffer_size as u32)?;
     media_buffer.Unlock()?;
 
     sample.AddBuffer(&media_buffer)?;
-
-    // Now using proper 100ns units directly
     sample.SetSampleTime(time_hns)?;
-    sample.SetSampleDuration(num_frames as i64 * packet_duration_hns)?;
+    sample.SetSampleDuration(packet_duration_hns)?;
 
     Ok(sample)
 }
