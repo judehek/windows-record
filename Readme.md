@@ -57,16 +57,11 @@ fn main() -> Result<()> {
 }
 ```
 
-## Advanced Features
+## Todo
 
-- Hardware encoder selection for optimal performance
-- Custom resolution and bitrate configuration
-- Debug mode for resource tracking
-- Thread-safe design for integration with GUI applications
-
-## Future Improvements
-
-- Multi-monitor support with automatic display detection
 - Additional codec options beyond H.264
-- Virtual audio device capture
-- Region-based recording
+- Multi-monitor support with automatic display detection
+- More robust audio sync
+- Audio input selection
+- Allowing recording system audio vs single window
+- The wave audio wave format is currently hard coded

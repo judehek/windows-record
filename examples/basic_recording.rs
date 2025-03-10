@@ -18,7 +18,7 @@ fn main() -> Result<()> {
         .input_dimensions(1920, 1080)  
         .output_dimensions(1920, 1080)
         .capture_audio(true)
-        .capture_microphone(false)
+        .capture_microphone(true)
         .microphone_volume(1.0)
         .debug_mode(true)  // Enable debug logging
         .output_path("output.mp4")
@@ -58,9 +58,6 @@ fn main() -> Result<()> {
 
     // Explicitly drop the recorder to trigger resource cleanup
     drop(recorder);
-    
-    // Force a GC to clean up any unreferenced resources
-    //std::mem::drop(std::mem::take_mut(&mut Vec::<()>::new()));
     
     info!("Application finished - all resources properly cleaned up");
     Ok(())

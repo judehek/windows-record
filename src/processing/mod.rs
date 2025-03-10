@@ -83,8 +83,6 @@ pub fn process_samples(
         match rec_video.try_recv() {
             Ok(samp) => {
                 had_work = true;
-                let start = std::time::Instant::now();
-
                 let converted = unsafe {
                     video::convert_bgra_to_nv12(
                         &device, 
@@ -94,8 +92,6 @@ pub fn process_samples(
                         output_height
                     )?
                 };
-
-                let write_start = std::time::Instant::now();
                 unsafe { writer.0.WriteSample(video_stream_index, &converted)? };
 
                 frame_count += 1;
@@ -122,7 +118,7 @@ pub fn process_samples(
                     
                     if let Some(mixer) = &mut audio_mixer {
                         // Add to mixer if we need to mix
-                        unsafe { mixer.add_system_audio(audio_samp); }
+                        mixer.add_system_audio(audio_samp);
                     } else if let Some(stream_index) = audio_stream_index {
                         // Write directly if no mixing needed
                         let write_start = std::time::Instant::now();
@@ -149,7 +145,7 @@ pub fn process_samples(
                     
                     if let Some(mixer) = &mut audio_mixer {
                         // Add to mixer if we need to mix
-                        unsafe {mixer.add_microphone_audio(mic_samp); }
+                        mixer.add_microphone_audio(mic_samp);
                     } else if let Some(stream_index) = audio_stream_index {
                         // Write directly if no mixing needed
                         let write_start = std::time::Instant::now();
