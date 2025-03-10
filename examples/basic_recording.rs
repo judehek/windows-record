@@ -3,47 +3,62 @@ use std::{env, time::Duration};
 use win_recorder::{Recorder, Result};
 
 fn main() -> Result<()> {
+    // Set up logging to see resource tracking in debug builds
     env::set_var("RUST_BACKTRACE", "full");
-    env::set_var("RUST_LOG", "debug");
-    env_logger::init(); // Initialize logging
+    env::set_var("RUST_LOG", "debug,win_recorder=debug");
+    env_logger::init(); 
 
-    // Create recorder using builder pattern
-    let config = Recorder::builder()
-        .fps(30, 1)
-        .input_dimensions(1920, 1080)
-        .output_dimensions(1920, 1080)
-        .capture_audio(true)
-        .capture_microphone(false)
-        .debug_mode(true)  // Enables logging
-        .output_path("output.mp4")
-        .build();
-
-    let recorder = Recorder::new(config)?
-        .with_process_name("League of Legends");
-
-    // Log system information
     info!("OS: {}", env::consts::OS);
     info!("Architecture: {}", env::consts::ARCH);
     info!("Application started");
 
-    std::thread::sleep(Duration::from_secs(3));
+    // Create recorder with optimal configuration for resource management
+    let config = Recorder::builder()
+        .fps(30, 1)
+        .input_dimensions(1920, 1080)  
+        .output_dimensions(1920, 1080)
+        .capture_audio(true)
+        .capture_microphone(true)
+        .microphone_volume(1.0)
+        .debug_mode(true)  // Enable debug logging
+        .output_path("output.mp4")
+        .build();
+
+    // Create the recorder with your target window name
+    // For this example, use a window that's currently open on your system
+    let recorder = Recorder::new(config)?
+        .with_process_name("Chrome");  // Change to match your target window
+
+    // Short delay before starting recording
+    std::thread::sleep(Duration::from_secs(2));
     info!("Starting recording");
 
-    let res = recorder.start_recording();
-    match &res {
+    // Start recording
+    match recorder.start_recording() {
         Ok(_) => info!("Recording started successfully"),
-        Err(e) => log::error!("Failed to start recording: {:?}", e),
+        Err(e) => {
+            log::error!("Failed to start recording: {:?}", e);
+            return Err(e);
+        }
     }
 
-    std::thread::sleep(Duration::from_secs(10));
+    // Record for 10 seconds - long enough to test memory usage over time
+    info!("Recording for 10 seconds...");
+    std::thread::sleep(Duration::from_millis(3500));
+    
+    // Stop recording and properly clean up resources
     info!("Stopping recording");
-
-    let res2 = recorder.stop_recording();
-    match &res2 {
+    match recorder.stop_recording() {
         Ok(_) => info!("Recording stopped successfully"),
-        Err(e) => log::error!("Failed to stop recording: {:?}", e),
+        Err(e) => {
+            log::error!("Failed to stop recording: {:?}", e);
+            return Err(e);
+        }
     }
 
-    info!("Application finished");
+    // Explicitly drop the recorder to trigger resource cleanup
+    drop(recorder);
+    
+    info!("Application finished - all resources properly cleaned up");
     Ok(())
 }

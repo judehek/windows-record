@@ -5,6 +5,7 @@ use windows::core::{ComInterface, Result, GUID};
 use windows::Win32::Foundation::TRUE;
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
+use windows::Win32::Media::Audio::{WAVEFORMATEX, WAVE_FORMAT_PCM};
 use windows::Win32::Media::MediaFoundation::*;
 
 pub unsafe fn create_sink_writer(
@@ -34,19 +35,54 @@ pub unsafe fn create_sink_writer(
     configure_video_stream(&sink_writer, fps_num, fps_den, output_width, output_height, video_bitrate, encoder_guid)?;
     current_stream_index += 1;
 
-    // Configure process audio stream
-    if capture_audio {
-        configure_audio_stream(&sink_writer, current_stream_index, false)?;
-        current_stream_index += 1;
-    }
-
-    // Configure microphone stream
-    if capture_microphone {
-        configure_audio_stream(&sink_writer, current_stream_index, true)?;
-        // current_stream_index += 1; // Only needed if we more streams after this
+    // Configure a single audio stream if either audio source is enabled
+    if capture_audio || capture_microphone {
+        // Use a new function that configures a stream suitable for mixed audio
+        configure_mixed_audio_stream(&sink_writer, current_stream_index)?;
+        // current_stream_index += 1;
     }
 
     Ok(sink_writer)
+}
+
+unsafe fn configure_mixed_audio_stream(
+    sink_writer: &IMFSinkWriter,
+    stream_index: u32,
+) -> Result<()> {
+    // Create output type 
+    let audio_output_type = create_audio_output_type()?;
+
+    // Create input type suitable for mixed audio (stereo, 16-bit, 44100Hz)
+    let audio_input_type = create_mixed_audio_input_type()?;
+
+    // Add stream and set input type
+    sink_writer.AddStream(&audio_output_type)?;
+    sink_writer.SetInputMediaType(stream_index, &audio_input_type, None)?;
+
+    Ok(())
+}
+
+unsafe fn create_mixed_audio_input_type() -> Result<IMFMediaType> {
+    let input_type: IMFMediaType = MFCreateMediaType()?;
+    let wave_format = WAVEFORMATEX {
+        wFormatTag: WAVE_FORMAT_PCM.try_into().unwrap(),
+        nChannels: 2,
+        nSamplesPerSec: 44100,
+        nAvgBytesPerSec: 176400,
+        nBlockAlign: 4,
+        wBitsPerSample: 16,
+        cbSize: 0,
+    };
+
+    MFInitMediaTypeFromWaveFormatEx(
+        &input_type,
+        &wave_format,
+        std::mem::size_of::<windows::Win32::Media::Audio::WAVEFORMATEX>()
+            .try_into()
+            .unwrap(),
+    )?;
+
+    Ok(input_type)
 }
 
 unsafe fn create_sink_attributes() -> Result<Option<IMFAttributes>> {
@@ -82,28 +118,6 @@ unsafe fn configure_video_stream(
     // First add stream, then set input type
     sink_writer.AddStream(&video_output_type)?;
     sink_writer.SetInputMediaType(0, &video_input_type, config_attrs.as_ref())?;
-
-    Ok(())
-}
-
-unsafe fn configure_audio_stream(
-    sink_writer: &IMFSinkWriter,
-    stream_index: u32,
-    is_microphone: bool,
-) -> Result<()> {
-    // Create output type (same for both)
-    let audio_output_type = create_audio_output_type()?;
-
-    // Create appropriate input type based on source
-    let audio_input_type = if is_microphone {
-        create_microphone_input_type()?
-    } else {
-        create_system_audio_input_type()?
-    };
-
-    // First add stream, then set input type
-    sink_writer.AddStream(&audio_output_type)?;
-    sink_writer.SetInputMediaType(stream_index, &audio_input_type, None)?;
 
     Ok(())
 }
@@ -182,76 +196,56 @@ unsafe fn create_audio_output_type() -> Result<IMFMediaType> {
     output_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
     output_type.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, 44100)?;
     output_type.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, 2)?;
-    output_type.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 12000)?;
+    output_type.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 16000)?;
 
     Ok(output_type)
 }
 
-unsafe fn create_system_audio_input_type() -> Result<IMFMediaType> {
-    let input_type: IMFMediaType = MFCreateMediaType()?;
-    let wav_format = windows::Win32::Media::Audio::WAVEFORMATEX {
-        wFormatTag: windows::Win32::Media::Audio::WAVE_FORMAT_PCM
-            .try_into()
-            .unwrap(),
-        nChannels: 2,
-        nSamplesPerSec: 44100,
-        nAvgBytesPerSec: 176400,
-        nBlockAlign: 4,
-        wBitsPerSample: 16,
-        cbSize: 0,
-    };
-
-    MFInitMediaTypeFromWaveFormatEx(
-        &input_type,
-        &wav_format,
-        std::mem::size_of::<windows::Win32::Media::Audio::WAVEFORMATEX>()
-            .try_into()
-            .unwrap(),
-    )?;
-
-    Ok(input_type)
-}
-
-unsafe fn create_microphone_input_type() -> Result<IMFMediaType> {
-    let input_type: IMFMediaType = MFCreateMediaType()?;
-    let wav_format = windows::Win32::Media::Audio::WAVEFORMATEX {
-        wFormatTag: 3u16,        // WAVE_FORMAT_IEEE_FLOAT = 3
-        nChannels: 1,            // Mono from microphone
-        nSamplesPerSec: 48000,   // Microphone sample rate
-        nAvgBytesPerSec: 192000, // 48000 * 4 bytes * 1 channel
-        nBlockAlign: 4,          // 32 bits = 4 bytes per sample
-        wBitsPerSample: 32,      // 32-bit float
-        cbSize: 0,
-    };
-
-    MFInitMediaTypeFromWaveFormatEx(
-        &input_type,
-        &wav_format,
-        std::mem::size_of::<windows::Win32::Media::Audio::WAVEFORMATEX>()
-            .try_into()
-            .unwrap(),
-    )?;
-
-    Ok(input_type)
-}
-
 pub unsafe fn create_dxgi_sample(texture: &ID3D11Texture2D, fps_num: u32) -> Result<IMFSample> {
+    // Cast the texture to an IDXGISurface
     let surface: IDXGISurface = texture.cast()?;
 
+    // Create a new Media Foundation sample
     let sample: IMFSample = MFCreateSample()?;
+    
+    // Create a DXGI buffer from the surface
     let buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &surface, 0, TRUE)?;
-
+    
+    // Add the buffer to the sample
     sample.AddBuffer(&buffer)?;
+    
+    // Set the sample duration based on the frame rate
     sample.SetSampleDuration(10_000_000 / fps_num as i64)?;
 
+    // Explicitly release the surface to avoid a reference leak
+    // The buffer still maintains its reference to the underlying resource
+    drop(surface);
+    
     Ok(sample)
 }
 
 pub unsafe fn init_media_foundation() -> Result<()> {
     use windows::Win32::System::Com::*;
 
+    #[cfg(debug_assertions)]
+    log::info!("Initializing Media Foundation and COM for D3D11 operation");
+
     CoInitializeEx(Some(ptr::null()), COINIT_MULTITHREADED)?;
     MFStartup(MF_VERSION, MFSTARTUP_FULL)?;
+
+    #[cfg(debug_assertions)]
+    {
+        use windows::Win32::Graphics::Direct3D11::*;
+        log::debug!("D3D11 Debug mode enabled - tracking resource creation and destruction");
+        
+        // When D3D11 debug mode is needed, uncomment these lines and modify the device creation
+        // to enable the debug layer by adding appropriate debug creation flags
+        // let mut debug: Option<ID3D11Debug> = None;
+        // device.QueryInterface(&mut debug)?;
+        // if let Some(debug) = debug {
+        //     debug.ReportLiveDeviceObjects(D3D11_RLDO_DETAIL);
+        // }
+    }
 
     Ok(())
 }
@@ -259,8 +253,22 @@ pub unsafe fn init_media_foundation() -> Result<()> {
 pub unsafe fn shutdown_media_foundation() -> Result<()> {
     use windows::Win32::System::Com::*;
 
+    #[cfg(debug_assertions)]
+    log::info!("Shutting down Media Foundation and COM");
+
+    // Clean up memory before shutting down
+    /*#[cfg(debug_assertions)]
+    {
+        log::debug!("Running garbage collection before Media Foundation shutdown");
+        // Force a GC to clean up any unreferenced resources
+        std::mem::drop(std::mem::take_mut(&mut Vec::<()>::new()));
+    }*/
+
     MFShutdown()?;
     CoUninitialize();
+
+    #[cfg(debug_assertions)]
+    log::info!("Media Foundation and COM shutdown complete");
 
     Ok(())
 }

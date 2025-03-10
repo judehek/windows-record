@@ -1,4 +1,5 @@
 use log::{error, info};
+use windows::Win32::System::Performance::QueryPerformanceCounter;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
@@ -13,7 +14,6 @@ use super::config::RecorderConfig;
 use crate::capture::{collect_audio, collect_frames, collect_microphone, find_window_by_substring};
 use crate::error::RecorderError;
 use crate::processing::{media, process_samples};
-use crate::recorder::utils::get_encoder_guid;
 use crate::types::{SendableSample, SendableWriter};
 
 pub struct RecorderInner {
@@ -104,11 +104,13 @@ impl RecorderInner {
             let rec_clone = recording.clone();
             let dev_clone = device.clone();
             let barrier_clone = barrier.clone();
+            let process_name_clone = process_name.to_string(); // Clone for thread ownership
             collect_video_handle = Some(std::thread::spawn(move || {
                 collect_frames(
                     sender_video,
                     rec_clone,
                     hwnd,
+                    &process_name_clone, // Pass process name for window tracking
                     fps_num,
                     fps_den,
                     input_width,
@@ -119,12 +121,18 @@ impl RecorderInner {
                 )
             }));
 
+            let mut start_qpc_i64: i64 = 0;
+            unsafe {
+                QueryPerformanceCounter(&mut start_qpc_i64);
+            }
+            let shared_start_qpc = start_qpc_i64 as u64;
+
             // Start audio capture thread if enabled
             if capture_audio {
                 let rec_clone = recording.clone();
                 let barrier_clone = barrier.clone();
                 collect_audio_handle = Some(std::thread::spawn(move || {
-                    collect_audio(sender_audio, rec_clone, process_id, barrier_clone)
+                    collect_audio(sender_audio, rec_clone, process_id, barrier_clone, Some(shared_start_qpc))
                 }));
             }
 
@@ -133,7 +141,7 @@ impl RecorderInner {
                 let rec_clone = recording.clone();
                 let barrier_clone = barrier.clone();
                 collect_microphone_handle = Some(std::thread::spawn(move || {
-                    collect_microphone(sender_microphone, rec_clone, barrier_clone)
+                    collect_microphone(sender_microphone, rec_clone, barrier_clone, Some(shared_start_qpc))
                 }));
             }
 
@@ -204,7 +212,23 @@ impl RecorderInner {
 impl Drop for RecorderInner {
     fn drop(&mut self) {
         unsafe {
+            #[cfg(debug_assertions)]
+            log::info!("RecorderInner is being dropped, cleaning up resources");
+            
+            // Ensure recording flag is set to false to terminate threads
+            if self.recording.load(std::sync::atomic::Ordering::Relaxed) {
+                #[cfg(debug_assertions)]
+                log::warn!("Recording flag was still true during drop; setting to false");
+                self.recording.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            
+            #[cfg(debug_assertions)]
+            log::info!("Shutting down Media Foundation");
+            
             let _ = media::shutdown_media_foundation();
+            
+            #[cfg(debug_assertions)]
+            log::info!("RecorderInner cleanup complete");
         }
     }
 }
@@ -222,7 +246,15 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
 
     let mut device = None;
     let mut context = None;
-    let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_DEBUG;
+    
+    // Base flags always include BGRA support
+    let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+    
+    // In debug builds, try to use debug layer
+    #[cfg(debug_assertions)]
+    {
+        flags |= D3D11_CREATE_DEVICE_DEBUG;
+    }
 
     // Try to create device with debug layer first
     let result = D3D11CreateDevice(
@@ -265,6 +297,24 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     // Enable multi-threading
     let multithread: ID3D11Multithread = device.cast()?;
     multithread.SetMultithreadProtected(true);
+
+    #[cfg(debug_assertions)]
+    {
+        // Try to enable resource tracking via debug interface
+        if let Ok(_debug) = device.cast::<ID3D11Debug>() {
+            info!("D3D11 Debug interface available - resource tracking enabled");
+            
+            // Enable debug info tracking
+            if let Ok(info_queue) = device.cast::<ID3D11InfoQueue>() {
+                // Configure info queue to break on D3D11 errors
+                info_queue.SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, true)?;
+                info_queue.SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, true)?;
+                info!("D3D11 Info Queue configured for error tracking");
+            }
+        } else {
+            info!("D3D11 Debug interface not available");
+        }
+    }
 
     Ok((device, context))
 }

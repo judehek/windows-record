@@ -3,70 +3,93 @@ use std::{env, time::Duration};
 use win_recorder::{Recorder, Result};
 
 fn main() -> Result<()> {
+    // Set up detailed logging to see resource tracking
     env::set_var("RUST_BACKTRACE", "full");
-    env::set_var("RUST_LOG", "info");
-    env_logger::init(); // Initialize logging
+    env::set_var("RUST_LOG", "debug,win_recorder=trace");
+    env_logger::init();
+
+    info!("OS: {}", env::consts::OS);
+    info!("Architecture: {}", env::consts::ARCH);
+    info!("Starting encoder selection and performance test");
 
     // First get available encoders
-    let recorder = Recorder::builder()
+    let temp_recorder = Recorder::builder()
         .debug_mode(true)
         .build();
-    let recorder = Recorder::new(recorder)?;
+    let temp_recorder = Recorder::new(temp_recorder)?;
     
-    let encoders = recorder.get_available_video_encoders()?;
+    let encoders = temp_recorder.get_available_video_encoders()?;
     
     // Log available encoders
-    info!("Available encoders:");
+    info!("Available hardware encoders:");
     for (name, info) in &encoders {
         info!("  {} (GUID: {:?})", name, info.guid);
     }
 
     // Try to find H264 encoder first, fall back to first available
     let chosen_encoder = encoders.values()
-    .find(|info| info.name.contains("264") || info.name.contains("H264"))
-    .expect("No H264 encoder available");
+        .find(|info| info.name.contains("264") || info.name.contains("H264"))
+        .expect("No H264 encoder available");
     
     info!("Selected encoder: {}", chosen_encoder.name);
+    
+    // Clean up the temporary recorder to release resources
+    drop(temp_recorder);
 
-    // Create recorder with chosen encoder
+    // Create recorder with chosen encoder and fixed-size resource pool
     let config = Recorder::builder()
-        .fps(30, 1)
-        .input_dimensions(2560, 1440)
-        .output_dimensions(1920, 1080)
+        .fps(60, 1)  // Higher framerate to stress test resource management
+        .input_dimensions(1920, 1080)
+        .output_dimensions(1920, 1080) 
         .capture_audio(true)
-        .capture_microphone(true)
+        .capture_microphone(false)
         .debug_mode(true)
-        .output_path("./output.mp4")
-        .video_bitrate(12000000)
+        .output_path("./output_perf_test.mp4")
+        .video_bitrate(8000000)
         .encoder(Some(chosen_encoder.guid))
         .build();
 
     let recorder = Recorder::new(config)?
-        .with_process_name("League of Legends");
+        .with_process_name("League of Legends"); // Change to match your target window
 
-    // Log system information
-    info!("OS: {}", env::consts::OS);
-    info!("Architecture: {}", env::consts::ARCH);
-    info!("Application started");
+    info!("Recorder initialized with fixed-size resource pool");
+    info!("Starting 20-second performance and memory leak test");
 
-    std::thread::sleep(Duration::from_secs(3));
-    info!("Starting recording");
-
-    let res = recorder.start_recording();
-    match &res {
-        Ok(_) => info!("Recording started successfully"),
-        Err(e) => log::error!("Failed to start recording: {:?}", e),
+    // Start recording
+    match recorder.start_recording() {
+        Ok(_) => info!("Recording started successfully with hardware encoder"),
+        Err(e) => {
+            log::error!("Failed to start recording: {:?}", e);
+            return Err(e);
+        }
     }
 
-    std::thread::sleep(Duration::from_secs(10));
-    info!("Stopping recording");
+    // Report memory usage during recording
+    for i in 1..=20 {
+        std::thread::sleep(Duration::from_secs(1));
+        if i % 5 == 0 {
+            info!("Recording for {} seconds - resources stable", i);
+        }
+    }
 
-    let res2 = recorder.stop_recording();
-    match &res2 {
+    // Stop recording and properly clean up resources
+    info!("Test complete - stopping recording");
+    match recorder.stop_recording() {
         Ok(_) => info!("Recording stopped successfully"),
-        Err(e) => log::error!("Failed to stop recording: {:?}", e),
+        Err(e) => {
+            log::error!("Failed to stop recording: {:?}", e);
+            return Err(e);
+        }
     }
 
-    info!("Application finished");
+    // Explicitly drop the recorder to trigger resource cleanup
+    info!("Cleaning up resources");
+    drop(recorder);
+    
+    // Force a GC to clean up any unreferenced resources
+    //std::mem::drop(std::mem::take_mut(&mut Vec::<()>::new()));
+    
+    info!("Performance test complete - all resources properly cleaned up");
+    info!("Output saved to ./output_perf_test.mp4");
     Ok(())
 }

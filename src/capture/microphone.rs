@@ -56,6 +56,7 @@ pub unsafe fn collect_microphone(
     send: Sender<SendableSample>,
     recording: Arc<AtomicBool>,
     started: Arc<Barrier>,
+    shared_start_qpc: Option<u64>,
 ) -> Result<()> {
     // Validate thread priority setting
     let priority_result = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
@@ -86,9 +87,8 @@ pub unsafe fn collect_microphone(
             return Err(e);
         }
     };
-
     // Get the device's mix format
-    let mix_format_ptr = microphone_client.GetMixFormat()?;
+    /*let mix_format_ptr = microphone_client.GetMixFormat()?;
     let wave_format = *mix_format_ptr;
     let format_tag = wave_format.wFormatTag;
     let channels = wave_format.nChannels;
@@ -103,18 +103,28 @@ pub unsafe fn collect_microphone(
     info!("  Samples Per Second: {} Hz", samples_per_sec);
     info!("  Bits Per Sample: {}", bits_per_sample);
     info!("  Block Align: {}", block_align);
-    info!("  Average Bytes Per Second: {}", avg_bytes_per_sec);
+    info!("  Average Bytes Per Second: {}", avg_bytes_per_sec);*/
+
+    // Use hard-coded format instead of getting from device
+    let wave_format = WAVEFORMATEX {
+        wFormatTag: WAVE_FORMAT_PCM.try_into().unwrap(),
+        nChannels: 2,
+        nSamplesPerSec: 44100,
+        nAvgBytesPerSec: 176400,
+        nBlockAlign: 4,
+        wBitsPerSample: 16,
+        cbSize: 0,
+    };
 
     let capture_client: IAudioCaptureClient = match microphone_client.GetService() {
         Ok(client) => client,
         Err(e) => {
-            CoTaskMemFree(Some(mix_format_ptr as *mut _));
             info!("Failed to get capture client: {:?}", e);
             return Err(e);
         }
     };
 
-    // Calculate packet duration based on device's actual sample rate
+    // Calculate packet duration based on hard-coded sample rate
     let packet_duration =
         std::time::Duration::from_nanos((1000000000.0 / wave_format.nSamplesPerSec as f64) as u64);
     let packet_duration_hns = packet_duration.as_nanos() as i64 / 100;
@@ -122,16 +132,33 @@ pub unsafe fn collect_microphone(
     // Get and validate initial QPC value
     let mut start_qpc_i64: i64 = 0;
     if !QueryPerformanceCounter(&mut start_qpc_i64).as_bool() {
-        CoTaskMemFree(Some(mix_format_ptr as *mut _));
         info!("Failed to get initial QPC value");
         return Err(E_FAIL.into());
     }
     if start_qpc_i64 <= 0 {
-        CoTaskMemFree(Some(mix_format_ptr as *mut _));
         info!("Invalid initial QPC value: {}", start_qpc_i64);
         return Err(E_FAIL.into());
     }
-    let start_qpc = start_qpc_i64 as u64;
+    let start_qpc = match shared_start_qpc {
+        Some(qpc) => {
+            info!("Using shared QPC start time: {}", qpc);
+            qpc
+        },
+        None => {
+            let mut start_qpc_i64: i64 = 0;
+            if !QueryPerformanceCounter(&mut start_qpc_i64).as_bool() {
+                info!("Failed to get initial QPC value");
+                return Err(E_FAIL.into());
+            }
+            if start_qpc_i64 <= 0 {
+                info!("Invalid initial QPC value: {}", start_qpc_i64);
+                return Err(E_FAIL.into());
+            }
+            let qpc = start_qpc_i64 as u64;
+            info!("Generated new QPC start time: {}", qpc);
+            qpc
+        }
+    };
     info!("Initial QPC value: {}", start_qpc);
 
     // Track timing statistics
@@ -142,7 +169,6 @@ pub unsafe fn collect_microphone(
     match microphone_client.Start() {
         Ok(_) => info!("Audio client started successfully"),
         Err(e) => {
-            CoTaskMemFree(Some(mix_format_ptr as *mut _));
             info!("Failed to start audio client: {:?}", e);
             return Err(e);
         }
@@ -199,13 +225,11 @@ pub unsafe fn collect_microphone(
                             Ok(sample) => {
                                 if let Err(e) = send.send(SendableSample(Arc::new(sample))) {
                                     info!("Failed to send audio sample, receiver likely dropped: {:?}", e);
-                                    CoTaskMemFree(Some(mix_format_ptr as *mut _));
                                     return Err(E_FAIL.into());
                                 }
                             }
                             Err(e) => {
                                 info!("Failed to create audio sample: {:?}", e);
-                                CoTaskMemFree(Some(mix_format_ptr as *mut _));
                                 return Err(e);
                             }
                         }
@@ -215,14 +239,12 @@ pub unsafe fn collect_microphone(
                         Ok(_) => {}
                         Err(e) => {
                             info!("Failed to release buffer: {:?}", e);
-                            CoTaskMemFree(Some(mix_format_ptr as *mut _));
                             return Err(e);
                         }
                     }
                 }
                 Err(e) => {
                     info!("Failed to get buffer: {:?}", e);
-                    CoTaskMemFree(Some(mix_format_ptr as *mut _));
                     return Err(e);
                 }
             }
@@ -248,8 +270,6 @@ pub unsafe fn collect_microphone(
         Err(e) => info!("Error stopping audio client: {:?}", e),
     }
 
-    // Clean up
-    CoTaskMemFree(Some(mix_format_ptr as *mut _));
     Ok(())
 }
 
@@ -307,13 +327,23 @@ unsafe fn setup_microphone_client() -> Result<IAudioClient> {
         return Err(e);
     }
 
-    let mix_format_ptr = audio_client.GetMixFormat()?;
+    // Create a hard-coded format that matches the system audio format
+    let wave_format = WAVEFORMATEX {
+        wFormatTag: WAVE_FORMAT_PCM.try_into().unwrap(),
+        nChannels: 2,
+        nSamplesPerSec: 44100,
+        nAvgBytesPerSec: 176400,  // nSamplesPerSec * nBlockAlign (44100 * 4)
+        nBlockAlign: 4,           // nChannels * wBitsPerSample/8 (2 * 16/8)
+        wBitsPerSample: 16,
+        cbSize: 0,
+    };
+
     let init_result = audio_client.Initialize(
         AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
-        default_period * 2,
+        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+        300000,
         0,
-        mix_format_ptr,
+        &wave_format,  // Use our hard-coded format instead of mix_format_ptr
         None,
     );
 
@@ -387,7 +417,7 @@ unsafe fn create_microphone_sample(
 
             // Debug first few frames
             if num_frames > 0 {
-                info!(
+                debug!(
                     "First few frames (L/R pairs): {:?}",
                     &src[..std::cmp::min(8 * num_channels, src.len())]
                 );
@@ -406,6 +436,7 @@ unsafe fn create_microphone_sample(
 
     sample.AddBuffer(&media_buffer)?;
     sample.SetSampleTime(time_hns)?;
+
     sample.SetSampleDuration(packet_duration_hns)?;
 
     Ok(sample)
