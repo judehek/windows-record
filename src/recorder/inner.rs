@@ -41,6 +41,7 @@ impl RecorderInner {
         let encoder_guid = config.encoder();
         let system_volume = config.system_volume();
         let microphone_volume = config.microphone_volume();
+        let microphone_device = config.microphone_device().map(|s| s.to_string());
 
 
         // Parse out path string from PathBuf
@@ -140,8 +141,9 @@ impl RecorderInner {
             if capture_microphone {
                 let rec_clone = recording.clone();
                 let barrier_clone = barrier.clone();
+                let device_str = microphone_device.as_deref();
                 collect_microphone_handle = Some(std::thread::spawn(move || {
-                    collect_microphone(sender_microphone, rec_clone, barrier_clone, Some(shared_start_qpc))
+                    collect_microphone(sender_microphone, rec_clone, barrier_clone, Some(shared_start_qpc), device_str)
                 }));
             }
 
