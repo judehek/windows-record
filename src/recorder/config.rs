@@ -27,7 +27,7 @@ pub struct RecorderConfig {
     debug_mode: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub enum AudioSource {
     #[default]
     Desktop,

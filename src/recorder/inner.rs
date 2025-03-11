@@ -146,8 +146,9 @@ impl RecorderInner {
             if capture_audio {
                 let rec_clone = recording.clone();
                 let barrier_clone = barrier.clone();
+                let audio_source_clone = config.audio_source().clone();
                 collect_audio_handle = Some(std::thread::spawn(move || {
-                    collect_audio(sender_audio, rec_clone, process_id, barrier_clone, Some(shared_start_qpc))
+                    collect_audio(sender_audio, rec_clone, process_id, barrier_clone, Some(shared_start_qpc), &audio_source_clone)
                 }));
             }
 
