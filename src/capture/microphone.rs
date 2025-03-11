@@ -1,4 +1,5 @@
 use log::{debug, info};
+use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -304,7 +305,7 @@ unsafe fn setup_microphone_client_for_device(device_id: Option<&str>) -> Result<
     // Get device either by ID or default
     let device = if let Some(id) = device_id {
         info!("Using specified audio input device ID: {}", id);
-        match enumerator.GetDevice(&windows::core::PCWSTR::from_raw(
+        match enumerator.GetDevice(windows::core::PCWSTR::from_raw(
             windows::core::HSTRING::from(id).as_ptr()
         )) {
             Ok(dev) => dev,

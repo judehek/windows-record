@@ -1,4 +1,6 @@
 use log::info;
+use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+use windows::Win32::Foundation::CO_E_ALREADYINITIALIZED;
 use std::ffi::OsString;
 use std::os::windows::prelude::OsStringExt;
 use windows::core::Result;

@@ -12,7 +12,7 @@ fn main() -> Result<()> {
     info!("Architecture: {}", env::consts::ARCH);
     info!("Application started");
 
-    // Create recorder with optimal configuration for resource management
+    // Create recorder
     let config = Recorder::builder()
         .fps(30, 1)
         .input_dimensions(1920, 1080)  
@@ -21,17 +21,17 @@ fn main() -> Result<()> {
         .capture_microphone(true)
         .microphone_volume(1.0)
         .system_volume(1.0)
-        .debug_mode(true)  // Enable debug logging
+        .debug_mode(true)
         .output_path("output.mp4")
         .build();
 
     // Create the recorder with your target window name
     // For this example, use a window that's currently open on your system
     let recorder = Recorder::new(config)?
-        .with_process_name("League of Legends (TM) Client");  // Change to match your target window
+        .with_process_name("League of Legends (TM) Client");
 
     // Short delay before starting recording
-    std::thread::sleep(Duration::from_secs(2));
+    std::thread::sleep(Duration::from_secs(1));
     info!("Starting recording");
 
     // Start recording

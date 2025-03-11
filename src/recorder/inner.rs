@@ -12,6 +12,7 @@ use windows::Win32::Graphics::Direct3D11::*;
 
 use super::config::RecorderConfig;
 use crate::capture::{collect_audio, collect_frames, collect_microphone, find_window_by_substring};
+use crate::device::get_audio_input_device_by_name;
 use crate::error::RecorderError;
 use crate::processing::{media, process_samples};
 use crate::types::{SendableSample, SendableWriter};
@@ -41,7 +42,20 @@ impl RecorderInner {
         let encoder_guid = config.encoder();
         let system_volume = config.system_volume();
         let microphone_volume = config.microphone_volume();
-        let microphone_device = config.microphone_device().map(|s| s.to_string());
+        let microphone_device = if let Some(device_name) = config.microphone_device() {
+            match get_audio_input_device_by_name(Some(device_name)) {
+                Ok(device_id) => {
+                    info!("Found device ID for '{}': {}", device_name, device_id);
+                    Some(device_id)
+                },
+                Err(e) => {
+                    info!("Could not get device ID for '{}', using default: {:?}", device_name, e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
 
         // Parse out path string from PathBuf
@@ -141,9 +155,9 @@ impl RecorderInner {
             if capture_microphone {
                 let rec_clone = recording.clone();
                 let barrier_clone = barrier.clone();
-                let device_str = microphone_device.as_deref();
+                let device_clone = microphone_device.clone();
                 collect_microphone_handle = Some(std::thread::spawn(move || {
-                    collect_microphone(sender_microphone, rec_clone, barrier_clone, Some(shared_start_qpc), device_str)
+                    collect_microphone(sender_microphone, rec_clone, barrier_clone, Some(shared_start_qpc), device_clone.as_deref())
                 }));
             }
 
