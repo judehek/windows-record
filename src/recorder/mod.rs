@@ -8,7 +8,6 @@ use self::inner::RecorderInner;
 use crate::error::{RecorderError, Result};
 use log::info;
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 pub struct Recorder {
     rec_inner: RefCell<Option<RecorderInner>>,

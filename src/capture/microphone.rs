@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::sync::Barrier;
-use windows::core::{implement, IUnknown};
-use windows::core::{ComInterface, Result};
+use windows::core::implement;
+use windows::core::Result;
 use windows::Win32::Foundation::*;
 use windows::Win32::Media::Audio::*;
 use windows::Win32::Media::MediaFoundation::{
@@ -273,11 +273,6 @@ pub unsafe fn collect_microphone(
     }
 
     Ok(())
-}
-
-unsafe fn setup_microphone_client() -> Result<IAudioClient> {
-    // Get the default microphone device
-    setup_microphone_client_for_device(None)
 }
 
 unsafe fn setup_microphone_client_for_device(device_id: Option<&str>) -> Result<IAudioClient> {

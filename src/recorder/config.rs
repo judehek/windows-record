@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use windows::core::GUID;
 use crate::device::VideoEncoderType;
 
 #[derive(Clone)]

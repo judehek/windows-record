@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::ptr;
 
 use windows::core::{ComInterface, Result, GUID};
@@ -238,25 +237,8 @@ pub unsafe fn create_dxgi_sample(texture: &ID3D11Texture2D, fps_num: u32) -> Res
 pub unsafe fn init_media_foundation() -> Result<()> {
     use windows::Win32::System::Com::*;
 
-    #[cfg(debug_assertions)]
-    log::info!("Initializing Media Foundation and COM for D3D11 operation");
-
     CoInitializeEx(Some(ptr::null()), COINIT_MULTITHREADED)?;
     MFStartup(MF_VERSION, MFSTARTUP_FULL)?;
-
-    #[cfg(debug_assertions)]
-    {
-        use windows::Win32::Graphics::Direct3D11::*;
-        log::debug!("D3D11 Debug mode enabled - tracking resource creation and destruction");
-        
-        // When D3D11 debug mode is needed, uncomment these lines and modify the device creation
-        // to enable the debug layer by adding appropriate debug creation flags
-        // let mut debug: Option<ID3D11Debug> = None;
-        // device.QueryInterface(&mut debug)?;
-        // if let Some(debug) = debug {
-        //     debug.ReportLiveDeviceObjects(D3D11_RLDO_DETAIL);
-        // }
-    }
 
     Ok(())
 }
@@ -264,22 +246,8 @@ pub unsafe fn init_media_foundation() -> Result<()> {
 pub unsafe fn shutdown_media_foundation() -> Result<()> {
     use windows::Win32::System::Com::*;
 
-    #[cfg(debug_assertions)]
-    log::info!("Shutting down Media Foundation and COM");
-
-    // Clean up memory before shutting down
-    /*#[cfg(debug_assertions)]
-    {
-        log::debug!("Running garbage collection before Media Foundation shutdown");
-        // Force a GC to clean up any unreferenced resources
-        std::mem::drop(std::mem::take_mut(&mut Vec::<()>::new()));
-    }*/
-
     MFShutdown()?;
     CoUninitialize();
-
-    #[cfg(debug_assertions)]
-    log::info!("Media Foundation and COM shutdown complete");
 
     Ok(())
 }

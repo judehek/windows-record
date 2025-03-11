@@ -1,7 +1,7 @@
 use std::time::Duration;
 use std::{env, io};
 use log::{error, info};
-use win_recorder::{enumerate_video_encoders, VideoEncoder, VideoEncoderType, Recorder, Result, RecorderConfig};
+use win_recorder::{enumerate_video_encoders, VideoEncoderType, Recorder, Result, RecorderConfig};
 
 fn main() -> Result<()> {
     // Set up logging to see resource tracking in debug builds
