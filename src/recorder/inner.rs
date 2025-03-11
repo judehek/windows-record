@@ -12,7 +12,7 @@ use windows::Win32::Graphics::Direct3D11::*;
 
 use super::config::RecorderConfig;
 use crate::capture::{collect_audio, collect_frames, collect_microphone, find_window_by_substring};
-use crate::device::{get_audio_input_device_by_name, get_video_encoder_by_name};
+use crate::device::get_audio_input_device_by_name;
 use crate::error::RecorderError;
 use crate::processing::{media, process_samples};
 use crate::types::{SendableSample, SendableWriter};
@@ -41,35 +41,6 @@ impl RecorderInner {
         let video_bitrate = config.video_bitrate();
         let system_volume = config.system_volume();
         let microphone_volume = config.microphone_volume();
-        
-        // Resolve encoder GUID, prioritizing direct GUID over named encoder
-        let encoder_guid = if let Some(guid) = config.encoder() {
-            info!("Using explicitly provided encoder GUID: {:?}", guid);
-            Some(guid)
-        } else if let Some(encoder_name) = config.encoder_name() {
-            match get_video_encoder_by_name(Some(encoder_name)) {
-                Ok(guid) => {
-                    info!("Found encoder GUID for '{}': {:?}", encoder_name, guid);
-                    Some(guid)
-                },
-                Err(e) => {
-                    info!("Could not get encoder for '{}', using default: {:?}", encoder_name, e);
-                    None
-                }
-            }
-        } else {
-            // Use default encoder
-            match get_video_encoder_by_name(None) {
-                Ok(guid) => {
-                    info!("Using default encoder with GUID: {:?}", guid);
-                    Some(guid)
-                },
-                Err(e) => {
-                    info!("Could not get default encoder: {:?}", e);
-                    None
-                }
-            }
-        };
         let microphone_device = if let Some(device_name) = config.microphone_device() {
             match get_audio_input_device_by_name(Some(device_name)) {
                 Ok(device_id) => {
@@ -111,7 +82,6 @@ impl RecorderInner {
                 capture_audio,
                 capture_microphone,
                 video_bitrate,
-                encoder_guid,
             )?;
 
             // Find target window

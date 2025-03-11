@@ -12,7 +12,6 @@ This is a high-performance window recorder built using the `windows` crate in Ru
 - H.264 hardware encoding supporting MP4 files
 - System audio and microphone capture
 - Customizable resolution and bitrate settings
-- Hardware encoder selection
 - Debug instrumentation for resource tracking
 - Abstracted interface that hides all `unsafe` code from users
 

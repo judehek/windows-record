@@ -12,8 +12,6 @@ pub struct RecorderConfig {
     output_width: u32,
     output_height: u32,
     video_bitrate: u32,
-    encoder: Option<GUID>,
-    encoder_name: Option<String>,
     
     // Audio settings
     capture_audio: bool,
@@ -50,8 +48,6 @@ impl Default for RecorderConfig {
             debug_mode: false,
             video_bitrate: 5000000,
             microphone_volume: None,
-            encoder: None,
-            encoder_name: None,
             audio_source: AudioSource::ActiveWindow,
             system_volume: None,
             microphone_device: None,
@@ -77,8 +73,6 @@ impl RecorderConfig {
     pub fn debug_mode(&self) -> bool { self.debug_mode }
     pub fn video_bitrate(&self) -> u32 { self.video_bitrate }
     pub fn microphone_volume(&self) -> Option<f32> { self.microphone_volume }
-    pub fn encoder(&self) -> Option<GUID> { self.encoder }
-    pub fn encoder_name(&self) -> Option<&str> { self.encoder_name.as_deref() }
     pub fn audio_source(&self) -> &AudioSource { &self.audio_source }
     pub fn system_volume(&self) -> Option<f32> { self.system_volume }
     pub fn microphone_device(&self) -> Option<&str> { self.microphone_device.as_deref() }
@@ -139,16 +133,6 @@ impl RecorderConfigBuilder {
     
     pub fn microphone_volume(mut self, volume: impl Into<Option<f32>>) -> Self {
         self.config.microphone_volume = volume.into();
-        self
-    }
-    
-    pub fn encoder(mut self, encoder: impl Into<Option<GUID>>) -> Self {
-        self.config.encoder = encoder.into();
-        self
-    }
-    
-    pub fn encoder_name<S: Into<String>>(mut self, name: Option<S>) -> Self {
-        self.config.encoder_name = name.map(|s| s.into());
         self
     }
     
