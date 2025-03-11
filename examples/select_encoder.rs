@@ -13,11 +13,13 @@ fn main() -> Result<()> {
     info!("Starting encoder selection and performance test");
 
     // First get available encoders
+    // Create a temporary recorder just to get the list of encoders
     let temp_recorder = Recorder::builder()
         .debug_mode(true)
         .build();
     let temp_recorder = Recorder::new(temp_recorder)?;
     
+    // Get all available encoders - this shows the benefit of our new encoder selection system
     let encoders = temp_recorder.get_available_video_encoders()?;
     
     // Log available encoders
@@ -27,11 +29,15 @@ fn main() -> Result<()> {
     }
 
     // Try to find H264 encoder first, fall back to first available
-    let chosen_encoder = encoders.values()
+    let h264_encoder_name = encoders.values()
         .find(|info| info.name.contains("264") || info.name.contains("H264"))
-        .expect("No H264 encoder available");
+        .map(|e| e.name.clone())
+        .unwrap_or_else(|| {
+            info!("No H264 encoder found, using first available");
+            encoders.values().next().expect("No encoders available").name.clone()
+        });
     
-    info!("Selected encoder: {}", chosen_encoder.name);
+    info!("Selected encoder: {}", h264_encoder_name);
     
     // Clean up the temporary recorder to release resources
     drop(temp_recorder);
@@ -46,7 +52,7 @@ fn main() -> Result<()> {
         .debug_mode(true)
         .output_path("./output_perf_test.mp4")
         .video_bitrate(8000000)
-        .encoder(Some(chosen_encoder.guid))
+        .encoder_name(Some(h264_encoder_name))
         .build();
 
     let recorder = Recorder::new(config)?

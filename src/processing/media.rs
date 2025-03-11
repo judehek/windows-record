@@ -112,8 +112,8 @@ unsafe fn configure_video_stream(
     // Create input media type
     let video_input_type = create_video_input_type(fps_num, fps_den, output_width, output_height)?;
 
-    // Configure encoder
-    let config_attrs = create_encoder_config(video_bitrate)?;
+    // Configure encoder with the specified GUID
+    let config_attrs = create_encoder_config(video_bitrate, encoder_guid)?;
 
     // First add stream, then set input type
     sink_writer.AddStream(&video_output_type)?;
@@ -171,11 +171,16 @@ unsafe fn create_video_input_type(
     Ok(input_type)
 }
 
-unsafe fn create_encoder_config(video_bitrate: u32) -> Result<Option<IMFAttributes>> {
+unsafe fn create_encoder_config(video_bitrate: u32, encoder_guid: Option<GUID>) -> Result<Option<IMFAttributes>> {
     let mut config_attrs: Option<IMFAttributes> = None;
     MFCreateAttributes(&mut config_attrs, 0)?;
 
     if let Some(attrs) = &config_attrs {
+        // Set encoder GUID if specified
+        if let Some(guid) = encoder_guid {
+            attrs.SetGUID(&MF_TRANSFORM_CLSID_Attribute, &guid)?;
+        }
+        
         attrs.SetUINT32(
             &CODECAPI_AVEncCommonRateControlMode,
             eAVEncCommonRateControlMode_GlobalVBR.0.try_into().unwrap(),

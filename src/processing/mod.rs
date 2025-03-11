@@ -1,7 +1,6 @@
 pub mod audio;
 pub mod media;
 pub mod video;
-pub mod encoder;
 pub mod audio_mixer;
 
 use log::{debug, error, info};
