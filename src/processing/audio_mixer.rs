@@ -10,10 +10,14 @@ pub struct AudioMixer {
     microphone_queue: VecDeque<SendableSample>,
     sample_rate: u32,
     channels: u16,
+    // Use gain controls instead of volume
+    system_volume: f32,
+    microphone_volume: f32,
+    both_sources_active: bool,
 }
 
 impl AudioMixer {
-    pub fn new(sample_rate: u32, bits_per_sample: u16, channels: u16) -> Self {
+    pub fn new(sample_rate: u32, bits_per_sample: u16, channels: u16, both_sources_active: bool) -> Self {
         info!("Creating AudioMixer: sample_rate={}, bits_per_sample={}, channels={}", 
               sample_rate, bits_per_sample, channels);
         Self {
@@ -21,7 +25,24 @@ impl AudioMixer {
             microphone_queue: VecDeque::new(),
             sample_rate,
             channels,
+            // Default volume levels (neutral/1.0)
+            system_volume: 1.0,
+            microphone_volume: 1.0,
+            both_sources_active,
         }
+    }
+
+    // Add methods to set volume levels
+    pub fn set_system_volume(&mut self, gain: f32) {
+        // Clamp gain between 0.0 and 2.0 (allow amplification)
+        self.system_volume = gain.max(0.0).min(2.0);
+        info!("System audio gain set to {:.2}", self.system_volume);
+    }
+
+    pub fn set_microphone_volume(&mut self, gain: f32) {
+        // Clamp gain between 0.0 and 2.0 (allow amplification)
+        self.microphone_volume = gain.max(0.0).min(2.0);
+        info!("Microphone gain set to {:.2}", self.microphone_volume);
     }
 
     pub fn add_system_audio(&mut self, sample: SendableSample) {
@@ -37,45 +58,161 @@ impl AudioMixer {
     pub unsafe fn process_next_sample(&mut self) -> Option<Result<Arc<IMFSample>>> {
         debug!("Processing next sample - sys queue: {}, mic queue: {}", 
                self.system_audio_queue.len(), self.microphone_queue.len());
+    
+        // If both sources are active, we need samples from both to mix
+        if self.both_sources_active {
+            // If either queue is empty, return None to wait for the other source
+            if self.system_audio_queue.is_empty() || self.microphone_queue.is_empty() {
+                debug!("Both sources active but waiting for samples from both queues to prevent desync");
+                return None;
+            }
+            
+            // We have samples from both sources - let's mix them
+            debug!("Mixing system and microphone audio");
+            let sys_sample = self.system_audio_queue.pop_front().unwrap();
+            let mic_sample = self.microphone_queue.pop_front().unwrap();
+            
+            // Mix the samples
+            match self.mix_samples(&sys_sample.0, &mic_sample.0) {
+                Ok(mixed) => {
+                    debug!("Successfully mixed audio samples");
+                    Some(Ok(Arc::new(mixed)))
+                },
+                Err(e) => {
+                    error!("Error mixing audio samples: {:?}", e);
+                    Some(Err(e))
+                },
+            }
+        } else {
+            // Only one source is active, process samples normally
+            
+            // Handle cases where only one source is available
+            if self.system_audio_queue.is_empty() && self.microphone_queue.is_empty() {
+                debug!("Both audio queues empty, returning None");
+                return None;
+            }
+            
+            // If only microphone audio is available, apply volume and return
+            if self.system_audio_queue.is_empty() && !self.microphone_queue.is_empty() {
+                debug!("Only microphone audio available, applying volume");
+                let mic_sample = self.microphone_queue.pop_front().unwrap();
+                
+                // If volume is 1.0 (default), no need to process
+                if (self.microphone_volume - 1.0).abs() < 0.001 {
+                    debug!("Using default microphone volume, passing through");
+                    return Some(Ok(mic_sample.0));
+                }
+                
+                // Apply microphone volume
+                match self.apply_volume_to_sample(&mic_sample.0, self.microphone_volume) {
+                    Ok(processed) => {
+                        debug!("Successfully applied volume to microphone sample");
+                        return Some(Ok(Arc::new(processed)));
+                    },
+                    Err(e) => {
+                        error!("Error applying volume to microphone sample: {:?}", e);
+                        return Some(Err(e));
+                    }
+                }
+            }
+            
+            // If only system audio is available, apply volume and return
+            if !self.system_audio_queue.is_empty() && self.microphone_queue.is_empty() {
+                debug!("Only system audio available, applying volume");
+                let sys_sample = self.system_audio_queue.pop_front().unwrap();
+                
+                // If volume is 1.0 (default), no need to process
+                if (self.system_volume - 1.0).abs() < 0.001 {
+                    debug!("Using default system volume, passing through");
+                    return Some(Ok(sys_sample.0));
+                }
+                
+                // Apply system volume
+                match self.apply_volume_to_sample(&sys_sample.0, self.system_volume) {
+                    Ok(processed) => {
+                        debug!("Successfully applied volume to system sample");
+                        return Some(Ok(Arc::new(processed)));
+                    },
+                    Err(e) => {
+                        error!("Error applying volume to system sample: {:?}", e);
+                        return Some(Err(e));
+                    }
+                }
+            }
+            
+            // This path should not be reachable due to the checks above,
+            // but just in case, return None
+            debug!("Unexpected state in process_next_sample");
+            None
+        }
+    }
 
-        // This is critical to prevent desync
-        if self.system_audio_queue.is_empty() || self.microphone_queue.is_empty() {
-            debug!("At least one audio queue is empty, returning None");
-            return None;
+    // Method to apply volume to a single audio sample
+    unsafe fn apply_volume_to_sample(&self, sample: &IMFSample, volume: f32) -> Result<IMFSample> {
+        debug!("Applying volume {:.2} to sample", volume);
+        
+        // Get sample time and duration
+        let sample_time = sample.GetSampleTime()?;
+        let sample_duration = sample.GetSampleDuration()?;
+        
+        // Get the buffer from the sample
+        let buffer = sample.GetBufferByIndex(0)?;
+        
+        // Get the data from the buffer
+        let mut data: *mut u8 = std::ptr::null_mut();
+        let mut length: u32 = 0;
+        
+        // Lock buffer
+        buffer.Lock(&mut data, None, Some(&mut length))?;
+        
+        // Create new sample and buffer for processed audio
+        let output_sample = MFCreateSample()?;
+        let output_buffer = MFCreateMemoryBuffer(length)?;
+        
+        // Lock output buffer
+        let mut output_data: *mut u8 = std::ptr::null_mut();
+        output_buffer.Lock(&mut output_data, None, None)?;
+        
+        // Access audio data as 16-bit PCM
+        let samples = std::slice::from_raw_parts(
+            data as *const i16,
+            length as usize / 2
+        );
+        
+        // Get output as mutable slice of i16
+        let output_samples = std::slice::from_raw_parts_mut(
+            output_data as *mut i16, 
+            length as usize / 2
+        );
+        
+        // Apply volume to each sample
+        for i in 0..samples.len() {
+            // Apply volume
+            let adjusted = (samples[i] as f32 * volume) as i32;
+            
+            // Clamp to i16 range to prevent clipping
+            output_samples[i] = adjusted.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
         }
         
-        // If either queue is empty, just return from the non-empty one
-        if self.system_audio_queue.is_empty() && !self.microphone_queue.is_empty() {
-            debug!("Only microphone audio available, passing through");
-            return Some(Ok(self.microphone_queue.pop_front()?.0));
+        // Unlock input buffer
+        let input_unlock_result = buffer.Unlock();
+        
+        // Set output buffer length and unlock
+        output_buffer.SetCurrentLength(length)?;
+        output_buffer.Unlock()?;
+        
+        // Check if unlocking input buffer failed
+        if let Err(e) = input_unlock_result {
+            return Err(e);
         }
         
-        if !self.system_audio_queue.is_empty() && self.microphone_queue.is_empty() {
-            debug!("Only system audio available, passing through");
-            return Some(Ok(self.system_audio_queue.pop_front()?.0));
-        }
+        // Add buffer to sample and set timing info
+        output_sample.AddBuffer(&output_buffer)?;
+        output_sample.SetSampleTime(sample_time)?;
+        output_sample.SetSampleDuration(sample_duration)?;
         
-        if self.system_audio_queue.is_empty() && self.microphone_queue.is_empty() {
-            debug!("Both audio queues empty, returning None");
-            return None;
-        }
-        
-        // We have samples from both sources - let's mix them
-        debug!("Mixing system and microphone audio");
-        let sys_sample = self.system_audio_queue.pop_front().unwrap();
-        let mic_sample = self.microphone_queue.pop_front().unwrap();
-        
-        // Mix the samples
-        match self.mix_samples(&sys_sample.0, &mic_sample.0) {
-            Ok(mixed) => {
-                debug!("Successfully mixed audio samples");
-                Some(Ok(Arc::new(mixed)))
-            },
-            Err(e) => {
-                error!("Error mixing audio samples: {:?}", e);
-                Some(Err(e))
-            },
-        }
+        debug!("Volume application completed successfully");
+        Ok(output_sample)
     }
 
     unsafe fn mix_samples(&self, sys_sample: &IMFSample, mic_sample: &IMFSample) -> Result<IMFSample> {
@@ -198,7 +335,7 @@ impl AudioMixer {
         }
     }
     
-    // Simplified mixing function with fixed 50/50 mix
+    // Mixing function with volume controls allowing amplification
     unsafe fn mix_pcm_audio(
         &self,
         sys_data: *mut u8,     // System audio (16-bit PCM)
@@ -207,9 +344,8 @@ impl AudioMixer {
         sys_length: u32,
         mic_length: u32
     ) -> Result<()> {
-        // Define mixing ratios (can be adjusted as needed)
-        let sys_ratio = 0.5;
-        let mic_ratio = 0.5;
+        debug!("Mixing with system volume:{:.2} mic volume:{:.2}", 
+               self.system_volume, self.microphone_volume);
         
         // Access the audio data as 16-bit PCM
         let sys_samples = std::slice::from_raw_parts(
@@ -237,16 +373,13 @@ impl AudioMixer {
             )
         );
         
-        debug!("Mixing {} samples with ratio system:{:.1} mic:{:.1}", 
-               mix_len, sys_ratio, mic_ratio);
-        
-        // Mix the samples
+        // Mix the samples with gain controls
         for i in 0..mix_len {
-            // Simple weighted average
-            let mixed_val = (sys_samples[i] as f32 * sys_ratio + 
-                            mic_samples[i] as f32 * mic_ratio) as i32;
+            // Apply gains to each source - this can amplify the signal
+            let mixed_val = (sys_samples[i] as f32 * self.system_volume + 
+                            mic_samples[i] as f32 * self.microphone_volume) as i32;
             
-            // Clamp to i16 range
+            // Clamp to i16 range to prevent clipping
             let clamped = mixed_val.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
             
             // Write to output
@@ -256,8 +389,9 @@ impl AudioMixer {
         // If sys_samples is longer than mic_samples, fill the rest with system audio
         if sys_samples.len() > mix_len {
             for i in mix_len..std::cmp::min(sys_samples.len(), output_samples.len()) {
-                // Reduce volume slightly since we're not mixing
-                output_samples[i] = (sys_samples[i] as f32 * 0.8) as i16;
+                // Apply system gain to remaining samples
+                let val = (sys_samples[i] as f32 * self.system_volume) as i32;
+                output_samples[i] = val.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
             }
         }
         

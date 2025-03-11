@@ -64,14 +64,6 @@ fn main() -> Result<()> {
         }
     }
 
-    // Report memory usage during recording
-    for i in 1..=20 {
-        std::thread::sleep(Duration::from_secs(1));
-        if i % 5 == 0 {
-            info!("Recording for {} seconds - resources stable", i);
-        }
-    }
-
     // Stop recording and properly clean up resources
     info!("Test complete - stopping recording");
     match recorder.stop_recording() {
@@ -85,9 +77,6 @@ fn main() -> Result<()> {
     // Explicitly drop the recorder to trigger resource cleanup
     info!("Cleaning up resources");
     drop(recorder);
-    
-    // Force a GC to clean up any unreferenced resources
-    //std::mem::drop(std::mem::take_mut(&mut Vec::<()>::new()));
     
     info!("Performance test complete - all resources properly cleaned up");
     info!("Output saved to ./output_perf_test.mp4");

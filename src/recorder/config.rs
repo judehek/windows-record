@@ -20,13 +20,14 @@ pub struct RecorderConfig {
     microphone_volume: Option<f32>,
     system_volume: Option<f32>,
     audio_source: AudioSource,
+    microphone_device: Option<String>,
     
     // Output settings
     output_path: PathBuf,
     debug_mode: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub enum AudioSource {
     #[default]
     Desktop,
@@ -51,6 +52,7 @@ impl Default for RecorderConfig {
             encoder: None,
             audio_source: AudioSource::ActiveWindow,
             system_volume: None,
+            microphone_device: None,
         }
     }
 }
@@ -76,6 +78,7 @@ impl RecorderConfig {
     pub fn encoder(&self) -> Option<GUID> { self.encoder }
     pub fn audio_source(&self) -> &AudioSource { &self.audio_source }
     pub fn system_volume(&self) -> Option<f32> { self.system_volume }
+    pub fn microphone_device(&self) -> Option<&str> { self.microphone_device.as_deref() }
 }
 
 #[derive(Default)]
@@ -94,7 +97,6 @@ impl RecorderConfigBuilder {
         self
     }
 
-    // Updated dimension methods
     pub fn input_dimensions(mut self, width: u32, height: u32) -> Self {
         self.config.input_width = width;
         self.config.input_height = height;
@@ -149,6 +151,11 @@ impl RecorderConfigBuilder {
     
     pub fn system_volume(mut self, volume: impl Into<Option<f32>>) -> Self {
         self.config.system_volume = volume.into();
+        self
+    }
+    
+    pub fn microphone_device<S: Into<String>>(mut self, device_name: Option<S>) -> Self {
+        self.config.microphone_device = device_name.map(|s| s.into());
         self
     }
 

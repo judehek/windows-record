@@ -12,6 +12,7 @@ use windows::Win32::Graphics::Direct3D11::*;
 
 use super::config::RecorderConfig;
 use crate::capture::{collect_audio, collect_frames, collect_microphone, find_window_by_substring};
+use crate::device::get_audio_input_device_by_name;
 use crate::error::RecorderError;
 use crate::processing::{media, process_samples};
 use crate::types::{SendableSample, SendableWriter};
@@ -39,6 +40,22 @@ impl RecorderInner {
         let capture_microphone = config.capture_microphone();
         let video_bitrate = config.video_bitrate();
         let encoder_guid = config.encoder();
+        let system_volume = config.system_volume();
+        let microphone_volume = config.microphone_volume();
+        let microphone_device = if let Some(device_name) = config.microphone_device() {
+            match get_audio_input_device_by_name(Some(device_name)) {
+                Ok(device_id) => {
+                    info!("Found device ID for '{}': {}", device_name, device_id);
+                    Some(device_id)
+                },
+                Err(e) => {
+                    info!("Could not get device ID for '{}', using default: {:?}", device_name, e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
 
         // Parse out path string from PathBuf
@@ -88,7 +105,7 @@ impl RecorderInner {
             // Set up channels
             let (sender_video, receiver_video) = channel::<SendableSample>();
             let (sender_audio, receiver_audio) = channel::<SendableSample>();
-            let (sender_microphone, receiver_microphone) = channel::<SendableSample>(); // Moved outside if block
+            let (sender_microphone, receiver_microphone) = channel::<SendableSample>();
 
             // Create D3D11 device and context
             let (device, context) = create_d3d11_device()?;
@@ -104,13 +121,13 @@ impl RecorderInner {
             let rec_clone = recording.clone();
             let dev_clone = device.clone();
             let barrier_clone = barrier.clone();
-            let process_name_clone = process_name.to_string(); // Clone for thread ownership
+            let process_name_clone = process_name.to_string();
             collect_video_handle = Some(std::thread::spawn(move || {
                 collect_frames(
                     sender_video,
                     rec_clone,
                     hwnd,
-                    &process_name_clone, // Pass process name for window tracking
+                    &process_name_clone,
                     fps_num,
                     fps_den,
                     input_width,
@@ -122,17 +139,16 @@ impl RecorderInner {
             }));
 
             let mut start_qpc_i64: i64 = 0;
-            unsafe {
-                QueryPerformanceCounter(&mut start_qpc_i64);
-            }
+            QueryPerformanceCounter(&mut start_qpc_i64);
             let shared_start_qpc = start_qpc_i64 as u64;
 
             // Start audio capture thread if enabled
             if capture_audio {
                 let rec_clone = recording.clone();
                 let barrier_clone = barrier.clone();
+                let audio_source_clone = config.audio_source().clone();
                 collect_audio_handle = Some(std::thread::spawn(move || {
-                    collect_audio(sender_audio, rec_clone, process_id, barrier_clone, Some(shared_start_qpc))
+                    collect_audio(sender_audio, rec_clone, process_id, barrier_clone, Some(shared_start_qpc), &audio_source_clone)
                 }));
             }
 
@@ -140,8 +156,9 @@ impl RecorderInner {
             if capture_microphone {
                 let rec_clone = recording.clone();
                 let barrier_clone = barrier.clone();
+                let device_clone = microphone_device.clone();
                 collect_microphone_handle = Some(std::thread::spawn(move || {
-                    collect_microphone(sender_microphone, rec_clone, barrier_clone, Some(shared_start_qpc))
+                    collect_microphone(sender_microphone, rec_clone, barrier_clone, Some(shared_start_qpc), device_clone.as_deref())
                 }));
             }
 
@@ -161,6 +178,8 @@ impl RecorderInner {
                     device,
                     capture_audio,
                     capture_microphone,
+                    system_volume,
+                    microphone_volume,
                 )
             }));
         }

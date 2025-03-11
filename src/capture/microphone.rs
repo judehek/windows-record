@@ -1,4 +1,5 @@
 use log::{debug, info};
+use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -57,6 +58,7 @@ pub unsafe fn collect_microphone(
     recording: Arc<AtomicBool>,
     started: Arc<Barrier>,
     shared_start_qpc: Option<u64>,
+    device_id: Option<&str>,
 ) -> Result<()> {
     // Validate thread priority setting
     let priority_result = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
@@ -80,7 +82,7 @@ pub unsafe fn collect_microphone(
     );
 
     // First get the microphone client to obtain its format
-    let microphone_client = match setup_microphone_client() {
+    let microphone_client = match setup_microphone_client_for_device(device_id) {
         Ok(client) => client,
         Err(e) => {
             info!("Failed to setup audio client: {:?}", e);
@@ -274,6 +276,11 @@ pub unsafe fn collect_microphone(
 }
 
 unsafe fn setup_microphone_client() -> Result<IAudioClient> {
+    // Get the default microphone device
+    setup_microphone_client_for_device(None)
+}
+
+unsafe fn setup_microphone_client_for_device(device_id: Option<&str>) -> Result<IAudioClient> {
     // Initialize COM if not already initialized
     let coinit_result = CoInitializeEx(None, COINIT_MULTITHREADED);
     match coinit_result {
@@ -294,14 +301,48 @@ unsafe fn setup_microphone_client() -> Result<IAudioClient> {
                 return Err(e);
             }
         };
-
-    let device = match enumerator.GetDefaultAudioEndpoint(eCapture, eConsole) {
-        Ok(dev) => dev,
-        Err(e) => {
-            info!("Failed to get default audio endpoint: {:?}", e);
-            return Err(e);
+    
+    // Get device either by ID or default
+    let device = if let Some(id) = device_id {
+        info!("Using specified audio input device ID: {}", id);
+        match enumerator.GetDevice(windows::core::PCWSTR::from_raw(
+            windows::core::HSTRING::from(id).as_ptr()
+        )) {
+            Ok(dev) => dev,
+            Err(e) => {
+                info!("Failed to get device with ID {}: {:?}. Falling back to default.", id, e);
+                match enumerator.GetDefaultAudioEndpoint(eCapture, eConsole) {
+                    Ok(dev) => dev,
+                    Err(e) => {
+                        info!("Failed to get default audio endpoint: {:?}", e);
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    } else {
+        info!("Using default audio input device");
+        match enumerator.GetDefaultAudioEndpoint(eCapture, eConsole) {
+            Ok(dev) => dev,
+            Err(e) => {
+                info!("Failed to get default audio endpoint: {:?}", e);
+                return Err(e);
+            }
         }
     };
+
+    // Log selected device info
+    if let Ok(id_ptr) = device.GetId() {
+        let id = id_ptr.to_string().unwrap_or_default();
+        info!("Selected audio input device ID: {}", id);
+    }
+    
+    if let Ok(props) = device.OpenPropertyStore(STGM_READ) {
+        if let Ok(prop_value) = props.GetValue(&PKEY_Device_FriendlyName) {
+            let name = prop_value.Anonymous.Anonymous.Anonymous.pwszVal.to_string().unwrap_or_default();
+            info!("Selected audio input device name: {}", name);
+        }
+    }
 
     let callback = AudioEndpointVolumeCallback;
     let callback_interface: IMMNotificationClient = callback.into();

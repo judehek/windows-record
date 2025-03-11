@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::Barrier;
 use windows::core::{implement, IUnknown};
 use windows::core::{ComInterface, Result};
+use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Foundation::*;
 use windows::Win32::Media::Audio::*;
 use windows::Win32::Media::MediaFoundation::*;
@@ -15,6 +16,7 @@ use windows::Win32::System::Threading::*;
 use StructuredStorage::PROPVARIANT;
 
 use crate::types::SendableSample;
+use crate::AudioSource;
 
 #[derive(Clone)]
 #[implement(IActivateAudioInterfaceCompletionHandler)]
@@ -75,6 +77,7 @@ pub unsafe fn collect_audio(
     proc_id: u32,
     started: Arc<Barrier>,
     shared_start_qpc: Option<u64>,
+    audio_source: &AudioSource,
 ) -> Result<()> {
     // Validate thread priority setting
     let priority_result = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
@@ -107,7 +110,7 @@ pub unsafe fn collect_audio(
         cbSize: 0,
     };
 
-    let audio_client = match setup_audio_client(proc_id, &wave_format) {
+    let audio_client = match setup_audio_client(proc_id, &wave_format, audio_source) {
         Ok(client) => client,
         Err(e) => {
             info!("Failed to setup audio client: {:?}", e);
@@ -264,46 +267,104 @@ pub unsafe fn collect_audio(
     Ok(())
 }
 
-unsafe fn setup_audio_client(proc_id: u32, wave_format: &WAVEFORMATEX) -> Result<IAudioClient> {
-    let activation_params = AUDIOCLIENT_ACTIVATION_PARAMS {
-        ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-        Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
-            ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
-                TargetProcessId: proc_id,
-                ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
-            },
+unsafe fn setup_audio_client(proc_id: u32, wave_format: &WAVEFORMATEX, audio_source: &AudioSource) -> Result<IAudioClient> {
+    info!("Setting up audio client with source: {:?}", audio_source);
+    
+    match audio_source {
+        AudioSource::ActiveWindow => {
+            // Process-specific audio capture (existing implementation)
+            let activation_params = AUDIOCLIENT_ACTIVATION_PARAMS {
+                ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+                Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
+                    ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+                        TargetProcessId: proc_id,
+                        ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+                    },
+                },
+            };
+
+            let mut prop_variant = PROPVARIANT::default();
+            (*prop_variant.Anonymous.Anonymous).vt = VT_BLOB;
+            (*prop_variant.Anonymous.Anonymous).Anonymous.blob.cbSize =
+                std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32;
+            (*prop_variant.Anonymous.Anonymous).Anonymous.blob.pBlobData =
+                &activation_params as *const _ as *mut _;
+
+            let handler = WASAPIActivateAudioInterfaceCompletionHandler::new();
+            let handler_interface: IActivateAudioInterfaceCompletionHandler = handler.clone().into();
+
+            ActivateAudioInterfaceAsync(
+                VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+                &IAudioClient::IID,
+                Some(&mut prop_variant),
+                &handler_interface,
+            )?;
+
+            let audio_client = handler.get_activate_result()?;
+
+            audio_client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                300000,
+                0,
+                wave_format,
+                None,
+            )?;
+
+            Ok(audio_client)
         },
-    };
+        AudioSource::Desktop => {
+            // System-wide audio capture
+            info!("Setting up desktop-wide audio capture");
+            
+            // Initialize COM if not already initialized
+            let coinit_result = CoInitializeEx(None, COINIT_MULTITHREADED);
+            if let Err(e) = coinit_result {
+                if e.code() != CO_E_ALREADYINITIALIZED {
+                    return Err(e);
+                }
+                info!("COM already initialized");
+            }
 
-    let mut prop_variant = PROPVARIANT::default();
-    (*prop_variant.Anonymous.Anonymous).vt = VT_BLOB;
-    (*prop_variant.Anonymous.Anonymous).Anonymous.blob.cbSize =
-        std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32;
-    (*prop_variant.Anonymous.Anonymous).Anonymous.blob.pBlobData =
-        &activation_params as *const _ as *mut _;
-
-    let handler = WASAPIActivateAudioInterfaceCompletionHandler::new();
-    let handler_interface: IActivateAudioInterfaceCompletionHandler = handler.clone().into();
-
-    ActivateAudioInterfaceAsync(
-        VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
-        &IAudioClient::IID,
-        Some(&mut prop_variant),
-        &handler_interface,
-    )?;
-
-    let audio_client = handler.get_activate_result()?;
-
-    audio_client.Initialize(
-        AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-        300000,
-        0,
-        wave_format,
-        None,
-    )?;
-
-    Ok(audio_client)
+            // Get the device enumerator
+            let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+            
+            // Get the default render endpoint
+            let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?;
+            
+            // Log device info
+            if let Ok(id_ptr) = device.GetId() {
+                let id = id_ptr.to_string().unwrap_or_default();
+                info!("Selected audio output device ID: {}", id);
+            }
+            
+            if let Ok(props) = device.OpenPropertyStore(STGM_READ) {
+                if let Ok(prop_value) = props.GetValue(&PKEY_Device_FriendlyName) {
+                    let name = prop_value.Anonymous.Anonymous.Anonymous.pwszVal.to_string().unwrap_or_default();
+                    info!("Selected audio output device name: {}", name);
+                }
+            }
+            
+            // Activate the audio client
+            let audio_client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
+            
+            // Initialize the audio client for loopback mode
+            audio_client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                300000,
+                0,
+                wave_format,
+                None,
+            )?;
+            
+            // Create event handle for the audio client
+            let event = CreateEventW(None, false, false, None)?;
+            audio_client.SetEventHandle(event)?;
+            
+            Ok(audio_client)
+        }
+    }
 }
 
 // Updated create_audio_sample to match microphone code's buffer handling
