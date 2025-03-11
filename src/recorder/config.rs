@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use windows::core::GUID;
+use crate::device::VideoEncoderType;
 
 #[derive(Clone)]
 pub struct RecorderConfig {
@@ -12,6 +13,7 @@ pub struct RecorderConfig {
     output_width: u32,
     output_height: u32,
     video_bitrate: u32,
+    video_encoder: VideoEncoderType,
     
     // Audio settings
     capture_audio: bool,
@@ -51,6 +53,7 @@ impl Default for RecorderConfig {
             audio_source: AudioSource::ActiveWindow,
             system_volume: None,
             microphone_device: None,
+            video_encoder: VideoEncoderType::default(),
         }
     }
 }
@@ -72,6 +75,7 @@ impl RecorderConfig {
     pub fn output_path(&self) -> &PathBuf { &self.output_path }
     pub fn debug_mode(&self) -> bool { self.debug_mode }
     pub fn video_bitrate(&self) -> u32 { self.video_bitrate }
+    pub fn video_encoder(&self) -> &VideoEncoderType { &self.video_encoder }
     pub fn microphone_volume(&self) -> Option<f32> { self.microphone_volume }
     pub fn audio_source(&self) -> &AudioSource { &self.audio_source }
     pub fn system_volume(&self) -> Option<f32> { self.system_volume }
@@ -148,6 +152,11 @@ impl RecorderConfigBuilder {
     
     pub fn microphone_device<S: Into<String>>(mut self, device_name: Option<S>) -> Self {
         self.config.microphone_device = device_name.map(|s| s.into());
+        self
+    }
+    
+    pub fn video_encoder(mut self, encoder: VideoEncoderType) -> Self {
+        self.config.video_encoder = encoder;
         self
     }
 

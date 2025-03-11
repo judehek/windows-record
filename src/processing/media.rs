@@ -17,6 +17,7 @@ pub unsafe fn create_sink_writer(
     capture_audio: bool,
     capture_microphone: bool,
     video_bitrate: u32,
+    video_encoder_id: &GUID,
 ) -> Result<IMFSinkWriter> {
     // Create and configure attributes
     let attributes = create_sink_attributes()?;
@@ -31,7 +32,7 @@ pub unsafe fn create_sink_writer(
     let mut current_stream_index = 0;
 
     // Configure video stream (always stream index 0)
-    configure_video_stream(&sink_writer, fps_num, fps_den, output_width, output_height, video_bitrate)?;
+    configure_video_stream(&sink_writer, fps_num, fps_den, output_width, output_height, video_bitrate, video_encoder_id)?;
     current_stream_index += 1;
 
     // Configure a single audio stream if either audio source is enabled
@@ -103,9 +104,10 @@ unsafe fn configure_video_stream(
     output_width: u32,
     output_height: u32,
     video_bitrate: u32,
+    video_encoder_id: &GUID,
 ) -> Result<()> {
     // Create output media type
-    let video_output_type = create_video_output_type(fps_num, fps_den, output_width, output_height)?;
+    let video_output_type = create_video_output_type(fps_num, fps_den, output_width, output_height, video_encoder_id)?;
 
     // Create input media type
     let video_input_type = create_video_input_type(fps_num, fps_den, output_width, output_height)?;
@@ -125,10 +127,11 @@ unsafe fn create_video_output_type(
     fps_den: u32,
     output_width: u32,
     output_height: u32,
+    video_encoder_id: &GUID,
 ) -> Result<IMFMediaType> {
     let output_type: IMFMediaType = MFCreateMediaType()?;
     output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-    output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
+    output_type.SetGUID(&MF_MT_SUBTYPE, video_encoder_id)?;
     output_type.SetUINT64(
         &MF_MT_FRAME_RATE,
         ((fps_num as u64) << 32) | (fps_den as u64),
@@ -139,10 +142,20 @@ unsafe fn create_video_output_type(
         &MF_MT_INTERLACE_MODE,
         MFVideoInterlace_Progressive.0.try_into().unwrap(),
     )?;
-    output_type.SetUINT32(
-        &MF_MT_VIDEO_PROFILE,
-        eAVEncH264VProfile_High.0.try_into().unwrap(),
-    )?;
+    // Set the appropriate profile based on the encoder type
+    if video_encoder_id == &MFVideoFormat_H264 {
+        output_type.SetUINT32(
+            &MF_MT_VIDEO_PROFILE,
+            eAVEncH264VProfile_High.0.try_into().unwrap(),
+        )?;
+    } else if video_encoder_id == &MFVideoFormat_HEVC {
+        // HEVC/H.265 uses different profile constants
+        // Use a common profile, typically Main profile for HEVC
+        output_type.SetUINT32(
+            &MF_MT_VIDEO_PROFILE,
+            1, // Main profile for HEVC
+        )?;
+    }
 
     Ok(output_type)
 }
