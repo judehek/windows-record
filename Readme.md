@@ -9,7 +9,7 @@ This is a high-performance window recorder built using the `windows` crate in Ru
 - High-performance recording with GPU acceleration (up to 60+ fps)
 - Efficient D3D11_USAGE_DEFAULT texture management with resource pooling
 - Proper DirectX and Media Foundation resource lifecycle management
-- H.264 hardware encoding supporting MP4 files
+- H.264 and H.265 support
 - System audio and microphone capture
 - Customizable resolution and bitrate settings
 - Debug instrumentation for resource tracking
@@ -32,7 +32,7 @@ use win_recorder::{Recorder, Result};
 fn main() -> Result<()> {
     // Create recorder with builder pattern
     let config = Recorder::builder()
-        .fps(60, 1)
+        .fps(30, 1)
         .input_dimensions(1920, 1080)
         .output_dimensions(1920, 1080)
         .capture_audio(true)
@@ -41,7 +41,7 @@ fn main() -> Result<()> {
 
     // Initialize with target window
     let recorder = Recorder::new(config)?
-        .with_process_name("Your Game Window Name");
+        .with_process_name("Your Window Name");
 
     // Start recording
     recorder.start_recording()?;
@@ -58,9 +58,6 @@ fn main() -> Result<()> {
 
 ## Todo
 
-- Additional codec options beyond H.264
 - Multi-monitor support with automatic display detection
 - More robust audio sync
-- Audio input selection
-- Allowing recording system audio vs single window
 - The wave audio wave format is currently hard coded (device agnostic)

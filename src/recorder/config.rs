@@ -38,7 +38,7 @@ pub enum AudioSource {
 impl Default for RecorderConfig {
     fn default() -> Self {
         Self {
-            fps_num: 60,
+            fps_num: 30,
             fps_den: 1,
             input_width: 1920,
             input_height: 1080,
