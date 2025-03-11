@@ -12,7 +12,7 @@ use windows::Win32::Graphics::Direct3D11::*;
 
 use super::config::RecorderConfig;
 use crate::capture::{collect_audio, collect_frames, collect_microphone, find_window_by_substring};
-use crate::device::get_audio_input_device_by_name;
+use crate::device::{get_audio_input_device_by_name, get_video_encoder_by_type};
 use crate::error::RecorderError;
 use crate::processing::{media, process_samples};
 use crate::types::{SendableSample, SendableWriter};
@@ -39,7 +39,6 @@ impl RecorderInner {
         let capture_audio = config.capture_audio();
         let capture_microphone = config.capture_microphone();
         let video_bitrate = config.video_bitrate();
-        let encoder_guid = config.encoder();
         let system_volume = config.system_volume();
         let microphone_volume = config.microphone_volume();
         let microphone_device = if let Some(device_name) = config.microphone_device() {
@@ -73,6 +72,9 @@ impl RecorderInner {
             // Initialize Media Foundation
             media::init_media_foundation()?;
 
+            // Get the video encoder
+            let video_encoder = get_video_encoder_by_type(config.video_encoder())?;
+            
             // Create and configure media sink
             let media_sink = media::create_sink_writer(
                 output_path,
@@ -83,7 +85,7 @@ impl RecorderInner {
                 capture_audio,
                 capture_microphone,
                 video_bitrate,
-                encoder_guid,
+                &video_encoder.id,
             )?;
 
             // Find target window

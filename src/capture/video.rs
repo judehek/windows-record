@@ -1,4 +1,4 @@
-use log::{debug, info, trace, warn};
+use log::{debug, info, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{SendError, Sender};
 use std::sync::Arc;
@@ -291,7 +291,7 @@ unsafe fn process_frame(
         let source_texture: ID3D11Texture2D = resource.cast()?;
         
         if should_show_content {
-            // Copy content from source to our pooled texture
+            // Copy content from source to pooled texture
             context.CopyResource(&pooled_texture, &source_texture);
             
             // Then copy from pooled to staging texture
@@ -341,8 +341,7 @@ unsafe fn send_frame(
     let samp = create_dxgi_sample(texture, fps_num)?;
     samp.SetSampleTime((frame_count as i64 * 10_000_000i64 / fps_num as i64) as i64)?;
     
-    // Wrap the sample in an Arc for thread-safety
-    // The Arc will ensure the sample is properly released when all references are gone
+    // Send the sample
     send.send(SendableSample(Arc::new(samp)))
         .map_err(|_| Error::from_win32())?;
     

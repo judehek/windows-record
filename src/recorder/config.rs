@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use windows::core::GUID;
+use crate::device::VideoEncoderType;
 
 #[derive(Clone)]
 pub struct RecorderConfig {
@@ -12,7 +12,7 @@ pub struct RecorderConfig {
     output_width: u32,
     output_height: u32,
     video_bitrate: u32,
-    encoder: Option<GUID>,
+    video_encoder: VideoEncoderType,
     
     // Audio settings
     capture_audio: bool,
@@ -37,7 +37,7 @@ pub enum AudioSource {
 impl Default for RecorderConfig {
     fn default() -> Self {
         Self {
-            fps_num: 60,
+            fps_num: 30,
             fps_den: 1,
             input_width: 1920,
             input_height: 1080,
@@ -49,10 +49,10 @@ impl Default for RecorderConfig {
             debug_mode: false,
             video_bitrate: 5000000,
             microphone_volume: None,
-            encoder: None,
             audio_source: AudioSource::ActiveWindow,
             system_volume: None,
             microphone_device: None,
+            video_encoder: VideoEncoderType::default(),
         }
     }
 }
@@ -74,8 +74,8 @@ impl RecorderConfig {
     pub fn output_path(&self) -> &PathBuf { &self.output_path }
     pub fn debug_mode(&self) -> bool { self.debug_mode }
     pub fn video_bitrate(&self) -> u32 { self.video_bitrate }
+    pub fn video_encoder(&self) -> &VideoEncoderType { &self.video_encoder }
     pub fn microphone_volume(&self) -> Option<f32> { self.microphone_volume }
-    pub fn encoder(&self) -> Option<GUID> { self.encoder }
     pub fn audio_source(&self) -> &AudioSource { &self.audio_source }
     pub fn system_volume(&self) -> Option<f32> { self.system_volume }
     pub fn microphone_device(&self) -> Option<&str> { self.microphone_device.as_deref() }
@@ -139,11 +139,6 @@ impl RecorderConfigBuilder {
         self
     }
     
-    pub fn encoder(mut self, encoder: impl Into<Option<GUID>>) -> Self {
-        self.config.encoder = encoder.into();
-        self
-    }
-    
     pub fn audio_source(mut self, source: AudioSource) -> Self {
         self.config.audio_source = source;
         self
@@ -156,6 +151,11 @@ impl RecorderConfigBuilder {
     
     pub fn microphone_device<S: Into<String>>(mut self, device_name: Option<S>) -> Self {
         self.config.microphone_device = device_name.map(|s| s.into());
+        self
+    }
+    
+    pub fn video_encoder(mut self, encoder: VideoEncoderType) -> Self {
+        self.config.video_encoder = encoder;
         self
     }
 

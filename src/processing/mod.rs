@@ -1,9 +1,8 @@
 pub mod audio;
 pub mod media;
 pub mod video;
-pub mod encoder;
-pub mod audio_mixer;
 
+use audio::AudioMixer;
 use log::{debug, error, info};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -55,7 +54,7 @@ pub fn process_samples(
 
     // Create audio mixer if we need to mix audio
     let mut audio_mixer = if capture_audio || capture_microphone {
-        let mut mixer = audio_mixer::AudioMixer::new(44100, 16, 2, capture_audio && capture_microphone);
+        let mut mixer = AudioMixer::new(44100, 16, 2, capture_audio && capture_microphone);
         
         // Set the volume/gain levels from parameters, using default of 1.0 if None
         let sys_vol = system_volume.unwrap_or(1.0);
@@ -77,7 +76,6 @@ pub fn process_samples(
     // Updated to use input/output dimensions
     let converter = unsafe { 
         video::setup_video_converter(
-            &device, 
             input_width, 
             input_height, 
             output_width, 

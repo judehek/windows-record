@@ -1,4 +1,3 @@
-use log::{debug, error};
 use std::mem::ManuallyDrop;
 use windows::core::{ComInterface, Result};
 use windows::Win32::Foundation::FALSE;
@@ -8,7 +7,6 @@ use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 
 pub unsafe fn setup_video_converter(
-    device: &ID3D11Device,
     input_width: u32,
     input_height: u32,
     output_width: u32,
@@ -73,7 +71,7 @@ pub unsafe fn convert_bgra_to_nv12(
         dwStreamID: 0,
     };
 
-    let mut output_slice = std::slice::from_mut(&mut output);
+    let output_slice = std::slice::from_mut(&mut output);
     let mut status: u32 = 0;
 
     if let Err(e) = converter.ProcessOutput(0, output_slice, &mut status) {

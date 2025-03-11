@@ -1,16 +1,13 @@
 mod config;
 mod inner;
-mod utils;
 
 // Re-export public types from config
 pub use self::config::{RecorderConfig, RecorderConfigBuilder, AudioSource};
 
 use self::inner::RecorderInner;
 use crate::error::{RecorderError, Result};
-use crate::processing::encoder::{ensure_mf_initialized, get_available_video_encoders, VideoEncoderInfo};
 use log::info;
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 pub struct Recorder {
     rec_inner: RefCell<Option<RecorderInner>>,
@@ -78,10 +75,5 @@ impl Recorder {
     /// Get the current configuration
     pub fn config(&self) -> &RecorderConfig {
         &self.config
-    }
-
-    pub fn get_available_video_encoders(&self) -> Result<HashMap<String, VideoEncoderInfo>> {
-        ensure_mf_initialized()?;
-        get_available_video_encoders().map_err(|e| RecorderError::Generic(format!("Failed to get encoders: {}", e)))
     }
 }
