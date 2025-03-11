@@ -15,8 +15,8 @@ use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerforma
 use windows::Win32::System::Threading::*;
 use StructuredStorage::PROPVARIANT;
 
-use crate::recorder::config::AudioSource;
 use crate::types::SendableSample;
+use crate::AudioSource;
 
 #[derive(Clone)]
 #[implement(IActivateAudioInterfaceCompletionHandler)]
@@ -77,7 +77,7 @@ pub unsafe fn collect_audio(
     proc_id: u32,
     started: Arc<Barrier>,
     shared_start_qpc: Option<u64>,
-    audio_source: &crate::recorder::config::AudioSource,
+    audio_source: &AudioSource,
 ) -> Result<()> {
     // Validate thread priority setting
     let priority_result = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);

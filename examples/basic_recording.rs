@@ -1,6 +1,6 @@
 use log::info;
 use std::{env, time::Duration};
-use win_recorder::{Recorder, Result};
+use win_recorder::{AudioSource, Recorder, Result};
 
 fn main() -> Result<()> {
     // Set up logging to see resource tracking in debug builds
@@ -19,6 +19,7 @@ fn main() -> Result<()> {
         .output_dimensions(1920, 1080)
         .capture_audio(true)
         .capture_microphone(true)
+        .audio_source(AudioSource::Desktop)
         .microphone_volume(1.0)
         .system_volume(1.0)
         .debug_mode(true)
