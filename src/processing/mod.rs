@@ -10,7 +10,7 @@ use std::sync::Arc;
 use windows::core::Result;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 
-use crate::types::{SendableSample, SendableWriter};
+use crate::types::{SendableSample, SendableWriter, ReplayBuffer};
 
 pub fn process_samples(
     writer: SendableWriter,
@@ -27,6 +27,7 @@ pub fn process_samples(
     capture_microphone: bool,
     system_volume: Option<f32>,
     microphone_volume: Option<f32>,
+    replay_buffer: Option<Arc<ReplayBuffer>>,
 ) -> Result<()> {
     info!("Starting sample processing");
 
@@ -97,6 +98,15 @@ pub fn process_samples(
         match rec_video.try_recv() {
             Ok(samp) => {
                 had_work = true;
+                // Extract timestamp for the replay buffer
+                let mut timestamp: i64 = unsafe { samp.0.GetSampleTime() }?;
+                
+                // Add to replay buffer if enabled
+                if let Some(buffer) = &replay_buffer {
+                    buffer.add_video_sample(SendableSample(Arc::clone(&samp.0)), timestamp)?;
+                }
+                
+                // Convert and write to file as usual
                 let converted = unsafe {
                     video::convert_bgra_to_nv12(
                         &device, 
@@ -130,6 +140,14 @@ pub fn process_samples(
                 Ok(audio_samp) => {
                     had_work = true;
                     
+                    // Extract timestamp for the replay buffer
+                    let mut timestamp: i64 = unsafe { audio_samp.0.GetSampleTime() }?;
+                    
+                    // Add to replay buffer if enabled
+                    if let Some(buffer) = &replay_buffer {
+                        buffer.add_audio_sample(SendableSample(Arc::clone(&audio_samp.0)), timestamp)?;
+                    }
+                    
                     if let Some(mixer) = &mut audio_mixer {
                         // Add to mixer if we need to mix
                         mixer.add_system_audio(audio_samp);
@@ -156,6 +174,14 @@ pub fn process_samples(
             match rec_microphone.try_recv() {
                 Ok(mic_samp) => {
                     had_work = true;
+                    
+                    // Extract timestamp for the replay buffer
+                    let mut timestamp: i64 = unsafe { mic_samp.0.GetSampleTime() }?;
+                    
+                    // Add to replay buffer if enabled
+                    if let Some(buffer) = &replay_buffer {
+                        buffer.add_audio_sample(SendableSample(Arc::clone(&mic_samp.0)), timestamp)?;
+                    }
                     
                     if let Some(mixer) = &mut audio_mixer {
                         // Add to mixer if we need to mix

@@ -1,4 +1,6 @@
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use std::collections::VecDeque;
 use log::{debug, trace, info};
 use windows::core::{Interface, Result};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
@@ -181,8 +183,6 @@ impl TexturePool {
     }
 }
 
-use std::time::Duration;
-
 pub fn duration_to_hns(duration: Duration) -> i64 {
     // Convert Duration to 100-nanosecond intervals (hns)
     duration.as_nanos() as i64 / 100
@@ -237,5 +237,162 @@ impl AudioConfig {
 
     pub fn bytes_per_second(&self) -> u32 {
         self.sample_rate * self.bytes_per_sample()
+    }
+}
+
+/// A circular buffer to store recent video and audio samples for replay functionality
+pub struct ReplayBuffer {
+    /// Maximum duration to keep in the buffer
+    max_duration: Duration,
+    /// Video samples with their timestamps
+    video_samples: Mutex<VecDeque<(SendableSample, i64)>>, // (sample, timestamp)
+    /// Audio samples with their timestamps
+    audio_samples: Mutex<VecDeque<(SendableSample, i64)>>, // (sample, timestamp)
+    /// Current buffer size in memory (approximate)
+    size_bytes: Mutex<usize>,
+    /// Time of the oldest sample in the buffer
+    pub oldest_timestamp: Mutex<i64>,
+    /// Current size limits for video and audio
+    video_limit: usize,
+    audio_limit: usize,
+}
+
+impl ReplayBuffer {
+    /// Create a new replay buffer with a specified duration
+    pub fn new(max_duration: Duration, initial_video_limit: usize, initial_audio_limit: usize) -> Self {
+        info!("Creating replay buffer with max duration of {:?}", max_duration);
+        Self {
+            max_duration,
+            video_samples: Mutex::new(VecDeque::with_capacity(initial_video_limit)),
+            audio_samples: Mutex::new(VecDeque::with_capacity(initial_audio_limit)),
+            size_bytes: Mutex::new(0),
+            oldest_timestamp: Mutex::new(0),
+            video_limit: initial_video_limit,
+            audio_limit: initial_audio_limit,
+        }
+    }
+
+    /// Add a video sample to the buffer
+    pub fn add_video_sample(&self, sample: SendableSample, timestamp: i64) -> Result<()> {
+        let mut samples = self.video_samples.lock().unwrap();
+        
+        // Add new sample
+        samples.push_back((sample, timestamp));
+        
+        // Update oldest timestamp if this is the only sample
+        if samples.len() == 1 {
+            let mut oldest = self.oldest_timestamp.lock().unwrap();
+            *oldest = timestamp;
+        }
+        
+        // Remove old samples if we exceed the limit
+        self.trim_buffer(&mut samples, timestamp)?;
+        
+        Ok(())
+    }
+
+    /// Add an audio sample to the buffer
+    pub fn add_audio_sample(&self, sample: SendableSample, timestamp: i64) -> Result<()> {
+        let mut samples = self.audio_samples.lock().unwrap();
+        
+        // Add new sample
+        samples.push_back((sample, timestamp));
+        
+        // Update oldest timestamp if needed
+        if timestamp < *self.oldest_timestamp.lock().unwrap() {
+            let mut oldest = self.oldest_timestamp.lock().unwrap();
+            *oldest = timestamp;
+        }
+        
+        // Remove old samples if we exceed the limit
+        self.trim_buffer(&mut samples, timestamp)?;
+        
+        Ok(())
+    }
+
+    /// Remove samples that are too old
+    fn trim_buffer(&self, samples: &mut VecDeque<(SendableSample, i64)>, latest_timestamp: i64) -> Result<()> {
+        let cutoff_timestamp = latest_timestamp - duration_to_hns(self.max_duration);
+        
+        // Remove samples older than the cutoff
+        while let Some((_, timestamp)) = samples.front() {
+            if *timestamp < cutoff_timestamp {
+                samples.pop_front();
+            } else {
+                break;
+            }
+        }
+        
+        // Update oldest timestamp
+        if samples.is_empty() {
+            let mut oldest = self.oldest_timestamp.lock().unwrap();
+            *oldest = latest_timestamp;
+        } else if let Some((_, timestamp)) = samples.front() {
+            let mut oldest = self.oldest_timestamp.lock().unwrap();
+            *oldest = *timestamp;
+        }
+        
+        Ok(())
+    }
+
+    /// Get a list of video samples within a time range
+    pub fn get_video_samples(&self, start_time: i64, end_time: i64) -> Vec<(SendableSample, i64)> {
+        let samples = self.video_samples.lock().unwrap();
+        samples
+            .iter()
+            .filter(|(_, timestamp)| *timestamp >= start_time && *timestamp <= end_time)
+            .map(|(sample, timestamp)| (SendableSample(Arc::clone(&sample.0)), *timestamp))
+            .collect()
+    }
+
+    /// Get a list of audio samples within a time range
+    pub fn get_audio_samples(&self, start_time: i64, end_time: i64) -> Vec<(SendableSample, i64)> {
+        let samples = self.audio_samples.lock().unwrap();
+        samples
+            .iter()
+            .filter(|(_, timestamp)| *timestamp >= start_time && *timestamp <= end_time)
+            .map(|(sample, timestamp)| (SendableSample(Arc::clone(&sample.0)), *timestamp))
+            .collect()
+    }
+
+    /// Get the buffer's current duration
+    pub fn current_duration(&self) -> Duration {
+        let video_samples = self.video_samples.lock().unwrap();
+        let audio_samples = self.audio_samples.lock().unwrap();
+        
+        if video_samples.is_empty() && audio_samples.is_empty() {
+            return Duration::from_secs(0);
+        }
+        
+        let mut latest_timestamp = 0;
+        let oldest_timestamp = *self.oldest_timestamp.lock().unwrap();
+        
+        // Find the latest timestamp from video samples
+        if let Some((_, timestamp)) = video_samples.back() {
+            latest_timestamp = *timestamp;
+        }
+        
+        // Check if the latest audio timestamp is newer
+        if let Some((_, timestamp)) = audio_samples.back() {
+            if *timestamp > latest_timestamp {
+                latest_timestamp = *timestamp;
+            }
+        }
+        
+        // Convert the difference to duration
+        hns_to_duration(latest_timestamp - oldest_timestamp)
+    }
+
+    /// Clear the buffer
+    pub fn clear(&self) {
+        let mut video_samples = self.video_samples.lock().unwrap();
+        let mut audio_samples = self.audio_samples.lock().unwrap();
+        let mut size_bytes = self.size_bytes.lock().unwrap();
+        
+        video_samples.clear();
+        audio_samples.clear();
+        *size_bytes = 0;
+        
+        debug!("Replay buffer cleared");
     }
 }

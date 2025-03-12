@@ -25,6 +25,10 @@ pub struct RecorderConfig {
     // Output settings
     output_path: PathBuf,
     debug_mode: bool,
+    
+    // Replay buffer settings
+    enable_replay_buffer: bool,
+    replay_buffer_seconds: u32,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -53,6 +57,8 @@ impl Default for RecorderConfig {
             system_volume: None,
             microphone_device: None,
             video_encoder: VideoEncoderType::default(),
+            enable_replay_buffer: false,
+            replay_buffer_seconds: 30,
         }
     }
 }
@@ -79,6 +85,8 @@ impl RecorderConfig {
     pub fn audio_source(&self) -> &AudioSource { &self.audio_source }
     pub fn system_volume(&self) -> Option<f32> { self.system_volume }
     pub fn microphone_device(&self) -> Option<&str> { self.microphone_device.as_deref() }
+    pub fn enable_replay_buffer(&self) -> bool { self.enable_replay_buffer }
+    pub fn replay_buffer_seconds(&self) -> u32 { self.replay_buffer_seconds }
 }
 
 #[derive(Default)]
@@ -156,6 +164,16 @@ impl RecorderConfigBuilder {
     
     pub fn video_encoder(mut self, encoder: VideoEncoderType) -> Self {
         self.config.video_encoder = encoder;
+        self
+    }
+    
+    pub fn enable_replay_buffer(mut self, enabled: bool) -> Self {
+        self.config.enable_replay_buffer = enabled;
+        self
+    }
+    
+    pub fn replay_buffer_seconds(mut self, seconds: u32) -> Self {
+        self.config.replay_buffer_seconds = seconds;
         self
     }
 
