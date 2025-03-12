@@ -20,10 +20,11 @@ pub fn enumerate_audio_input_devices() -> Result<Vec<AudioInputDevice>> {
         // Initialize COM if not already initialized
         let coinit_result = CoInitializeEx(None, COINIT_MULTITHREADED);
         if let Err(e) = coinit_result {
-            if e.code() != CO_E_ALREADYINITIALIZED {
+            // Continue if COM is already initialized or if threading model is different
+            if e.code() != CO_E_ALREADYINITIALIZED && e.code() != windows::Win32::Foundation::RPC_E_CHANGED_MODE.into() {
                 return Err(e);
             }
-            info!("COM already initialized");
+            info!("COM already initialized (possibly with different threading model)");
         }
 
         // Create device enumerator
