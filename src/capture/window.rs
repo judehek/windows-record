@@ -3,14 +3,49 @@ use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextW, IsWindow, IsWindowVisible};
 use log::{debug, trace};
 
+/// Defines how window titles should be matched
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowMatchType {
+    /// Match any window whose title contains the given string (case-insensitive)
+    Substring,
+    /// Match only windows whose title exactly matches the given string (case-sensitive)
+    ExactMatch,
+}
+
+impl Default for WindowMatchType {
+    fn default() -> Self {
+        WindowMatchType::Substring
+    }
+}
+
 struct SearchContext {
-    substring: String,
+    search_string: String,
+    match_type: WindowMatchType,
     result: AtomicIsize,
 }
 
-pub fn get_window_by_string(substring: &str) -> Option<HWND> {
+/// Gets a window handle by searching for windows with titles matching the given string
+/// Uses substring matching (case-insensitive)
+pub fn get_window_by_string(search_string: &str) -> Option<HWND> {
+    get_window_by_string_with_options(search_string, WindowMatchType::Substring)
+}
+
+/// Gets a window handle by searching for windows with titles exactly matching the given string
+/// Uses exact matching (case-sensitive)
+pub fn get_window_by_exact_string(search_string: &str) -> Option<HWND> {
+    get_window_by_string_with_options(search_string, WindowMatchType::ExactMatch)
+}
+
+/// Gets a window handle by searching for windows with titles matching the given string and options
+pub fn get_window_by_string_with_options(search_string: &str, match_type: WindowMatchType) -> Option<HWND> {
+    let search_str = match match_type {
+        WindowMatchType::Substring => search_string.to_lowercase(),
+        WindowMatchType::ExactMatch => search_string.to_string(),
+    };
+
     let context = SearchContext {
-        substring: substring.to_lowercase(),
+        search_string: search_str,
+        match_type,
         result: AtomicIsize::new(0),
     };
 
@@ -23,10 +58,11 @@ pub fn get_window_by_string(substring: &str) -> Option<HWND> {
 
     let hwnd_value = context.result.load(Ordering::Relaxed);
     if hwnd_value == 0 {
-        debug!("No window found with substring: {}", substring);
+        debug!("No window found matching '{}' with {:?}", search_string, match_type);
         None
     } else {
-        debug!("Found window with substring '{}' at handle {:?}", substring, HWND(hwnd_value));
+        debug!("Found window matching '{}' with {:?} at handle {:?}", 
+               search_string, match_type, HWND(hwnd_value));
         Some(HWND(hwnd_value))
     }
 }
@@ -69,9 +105,31 @@ unsafe extern "system" fn window_enumeration_callback(hwnd: HWND, lparam: LPARAM
     
     let mut text: [u16; 512] = [0; 512];
     let length = GetWindowTextW(hwnd, &mut text);
-    let window_text = String::from_utf16_lossy(&text[..length as usize]).to_lowercase();
-
-    if window_text.contains(&context.substring) {
+    
+    let window_text = match context.match_type {
+        WindowMatchType::Substring => {
+            String::from_utf16_lossy(&text[..length as usize]).to_lowercase()
+        },
+        WindowMatchType::ExactMatch => {
+            String::from_utf16_lossy(&text[..length as usize])
+        },
+    };
+    
+    // Print both strings for debugging
+    if context.match_type == WindowMatchType::ExactMatch {
+        log::debug!("Exact matching: '{}' vs '{}'", window_text, context.search_string);
+    }
+    
+    let is_match = match context.match_type {
+        WindowMatchType::Substring => {
+            window_text.contains(&context.search_string)
+        },
+        WindowMatchType::ExactMatch => {
+            window_text == context.search_string
+        },
+    };
+    
+    if is_match {
         trace!("Found matching window: '{}'", window_text);
         context.result.store(hwnd.0, Ordering::Relaxed);
         BOOL(0) // Stop enumeration

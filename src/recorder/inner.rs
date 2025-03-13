@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 
 use super::config::RecorderConfig;
-use crate::capture::{collect_audio, get_frames, collect_microphone, get_window_by_string};
+use crate::capture::{collect_audio, get_frames, collect_microphone, get_window_by_string, get_window_by_exact_string};
 use crate::device::{get_audio_input_device_by_name, get_video_encoder_by_type};
 use crate::error::RecorderError;
 use crate::processing::{media, process_samples};
@@ -29,7 +29,13 @@ pub struct RecorderInner {
 
 impl RecorderInner {
     pub fn init(config: &RecorderConfig, process_name: &str) -> Result<Self> {
-        info!("Initializing recorder for process: {}", process_name);
+        // By default, use substring matching (for backward compatibility)
+        Self::init_with_exact_match(config, process_name, false)
+    }
+    
+    pub fn init_with_exact_match(config: &RecorderConfig, process_name: &str, use_exact_match: bool) -> Result<Self> {
+        info!("Initializing recorder for process: {} with exact match: {}", 
+              process_name, use_exact_match);
 
         // Clone the necessary values from config at the start
         let fps_num = config.fps_num();
@@ -112,9 +118,12 @@ impl RecorderInner {
                 &video_encoder.id,
             )?;
 
-            // Find target window
-            let hwnd = get_window_by_string(process_name)
-                .ok_or_else(|| RecorderError::FailedToStart("No window found".to_string()))?;
+            // Find target window with exact match if specified
+            let hwnd = if use_exact_match {
+                get_window_by_exact_string(process_name)
+            } else {
+                get_window_by_string(process_name)
+            }.ok_or_else(|| RecorderError::FailedToStart("No window found".to_string()))?;
 
             // Get the process ID
             let mut process_id: u32 = 0;
@@ -161,6 +170,7 @@ impl RecorderInner {
                     barrier_clone,
                     dev_clone,
                     context_mutex,
+                    use_exact_match,
                 )
             }));
 

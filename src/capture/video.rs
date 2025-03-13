@@ -29,17 +29,25 @@ struct WindowTracker {
     check_interval: Duration,
     /// Whether we have seen the window in focus at least once
     ever_focused: bool,
+    /// Whether to use exact matching
+    use_exact_match: bool,
 }
 
 impl WindowTracker {
     /// Create a new window tracker
     fn new(hwnd: HWND, process_name: &str) -> Self {
+        Self::new_with_exact_match(hwnd, process_name, false)
+    }
+    
+    /// Create a new window tracker with option for exact matching
+    fn new_with_exact_match(hwnd: HWND, process_name: &str, use_exact_match: bool) -> Self {
         Self {
             hwnd,
             process_name: process_name.to_string(),
             last_check: Instant::now(),
             check_interval: Duration::from_secs(2), // Check every 2 seconds
             ever_focused: false,
+            use_exact_match,
         }
     }
     
@@ -73,11 +81,24 @@ impl WindowTracker {
         }
         
         // If not, try to find the window again
-        debug!("Window handle no longer valid, attempting to find '{}' again", self.process_name);
-        if let Some(new_hwnd) = get_window_by_string(&self.process_name) {
-            debug!("Found window again with new handle: {:?}", new_hwnd);
-            self.hwnd = new_hwnd;
-            return true;
+        if self.use_exact_match {
+            debug!("Window handle no longer valid, attempting to find '{}' again with exact match", 
+                self.process_name);
+            
+            if let Some(new_hwnd) = super::window::get_window_by_exact_string(&self.process_name) {
+                debug!("Found window again with new handle: {:?}", new_hwnd);
+                self.hwnd = new_hwnd;
+                return true;
+            }
+        } else {
+            debug!("Window handle no longer valid, attempting to find '{}' again with substring match", 
+                self.process_name);
+            
+            if let Some(new_hwnd) = super::window::get_window_by_string(&self.process_name) {
+                debug!("Found window again with new handle: {:?}", new_hwnd);
+                self.hwnd = new_hwnd;
+                return true;
+            }
         }
         
         debug!("Failed to find window '{}'", self.process_name);
@@ -90,7 +111,7 @@ enum FrameError {
     SendError(SendError<SendableSample>),
     WindowsError(WindowsError),
     ChannelClosed,
-    TexturePoolError, // Simple variant without associated data
+    TexturePoolError,
 }
 
 // Keep your existing impls unchanged
@@ -118,12 +139,13 @@ pub unsafe fn get_frames(
     started: Arc<Barrier>,
     device: Arc<ID3D11Device>,
     context_mutex: Arc<Mutex<ID3D11DeviceContext>>,
+    use_exact_match: bool,
 ) -> Result<()> {
     info!("Starting frame collection for window: '{}'", get_window_title(hwnd));
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 
     // Create window tracker to handle focus and window validity
-    let mut window_tracker = WindowTracker::new(hwnd, process_name);
+    let mut window_tracker = WindowTracker::new_with_exact_match(hwnd, process_name, use_exact_match);
 
     let frame_duration = Duration::from_nanos(1_000_000_000 * fps_den as u64 / fps_num as u64);
     let mut next_frame_time = Instant::now();
@@ -169,9 +191,13 @@ pub unsafe fn get_frames(
         if !window_tracker.ensure_valid_window() {
             // Window is no longer valid, try to find it again
             warn!("Window no longer valid, attempting to find '{}'", process_name);
-            if let Some(new_hwnd) = get_window_by_string(process_name) {
+            if let Some(new_hwnd) = if use_exact_match {
+                super::window::get_window_by_exact_string(process_name)
+            } else {
+                super::window::get_window_by_string(process_name)
+            } {
                 info!("Found window '{}' again, continuing recording", process_name);
-                window_tracker = WindowTracker::new(new_hwnd, process_name);
+                window_tracker = WindowTracker::new_with_exact_match(new_hwnd, process_name, use_exact_match);
             } else {
                 // Can't find window, wait and retry
                 warn!("Window '{}' not found, will retry", process_name);

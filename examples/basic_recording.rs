@@ -24,8 +24,16 @@ fn main() -> Result<()> {
 
     // Create the recorder with your target window name
     // For this example, use a window that's currently open on your system
+    
+    // The line below will match any window containing "Chrome" (e.g., "Google Chrome")
+    // let recorder = Recorder::new(config)?
+    //     .with_process_name("Chrome");
+    
+    // This will match ONLY windows with the EXACT title "Google Chrome" (nothing before/after)
+    // You likely need to adjust this to the exact title of your Chrome window
+    // For example, if the title is "New Tab - Google Chrome", use that exact string
     let recorder = Recorder::new(config)?
-        .with_process_name("Chrome");
+        .with_process_name("Google Chrome");
 
     // Short delay before starting recording
     std::thread::sleep(Duration::from_secs(1));
