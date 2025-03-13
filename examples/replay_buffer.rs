@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .audio_source(AudioSource::Desktop)
         .capture_microphone(true)
         .enable_replay_buffer(true)
-        .replay_buffer_seconds(10) // Keep last 10 seconds in buffer
+        .replay_buffer_seconds(30) // Keep last 10 seconds in buffer
         .build();
         
     let recorder = Recorder::new(recorder)?.with_process_name(process_name);

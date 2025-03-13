@@ -29,9 +29,14 @@ impl SendableSample {
     
     /// Create a new SendableSample with pool tracking for auto-return
     pub fn new_pooled(sample: IMFSample, texture: &ID3D11Texture2D, pool: Arc<SamplePool>) -> Self {
+        let texture_ptr = texture as *const _ as usize;
+        
+        #[cfg(debug_assertions)]
+        trace!("Creating pooled SendableSample for texture {:p}", texture as *const _);
+        
         Self {
             sample: Arc::new(sample),
-            texture_ptr: Some(texture as *const _ as usize),
+            texture_ptr: Some(texture_ptr),
             pool: Some(pool),
         }
     }
@@ -55,6 +60,14 @@ impl Drop for SendableSample {
         if let (Some(pool), Some(texture_ptr)) = (&self.pool, self.texture_ptr) {
             // Only return to pool if we're the last reference to this sample
             if Arc::strong_count(&self.sample) == 1 {
+                // Create local copies to avoid borrowing issues in the closure
+                let texture_ptr_copy = texture_ptr;
+                let pool_clone = pool.clone();
+                
+                // Have to clone the IMFSample from the Arc since we can't move out of self.sample
+                // during drop (we don't own self)
+                let sample_clone = unsafe { self.sample.as_ref().clone() };
+                
                 // Use a thread-local to track whether we're already inside a drop to prevent cycles
                 thread_local! {
                     static IN_DROP: std::cell::RefCell<bool> = std::cell::RefCell::new(false);
@@ -65,26 +78,25 @@ impl Drop for SendableSample {
                     if !already_dropping {
                         *in_drop.borrow_mut() = true;
                         
-                        let texture_ptr_copy = texture_ptr;
-                        let pool_clone = pool.clone();
-                        
-                        // Have to clone the IMFSample from the Arc since we can't move out of self.sample
-                        // during drop (we don't own self)
-                        let sample_clone = unsafe { self.sample.as_ref().clone() };
-                        
                         // Return the sample to the pool
                         unsafe { 
                             if let Err(e) = pool_clone.release_no_texture(texture_ptr_copy, sample_clone) {
                                 error!("Failed to return sample to pool: {:?}", e);
+                            } else {
+                                trace!("Successfully returned sample for texture {:p} to pool", 
+                                      texture_ptr_copy as *const ID3D11Texture2D);
                             }
                         }
                         
                         *in_drop.borrow_mut() = false;
                     }
                 });
-            } else {
-                trace!("Not releasing sample to pool - {} references remaining", 
-                      Arc::strong_count(&self.sample) - 1);
+            } else if cfg!(debug_assertions) {
+                // Only log in debug mode and at a reasonable rate
+                if Arc::strong_count(&self.sample) % 100 == 0 {
+                    trace!("Not releasing sample to pool - {} references remaining", 
+                          Arc::strong_count(&self.sample) - 1);
+                }
             }
         }
     }
@@ -356,7 +368,9 @@ impl SamplePool {
             let released = self.released_count.load(std::sync::atomic::Ordering::SeqCst);
             let active = acquired - released + 1;
             
-            if active % 30 == 0 { // Log every 30 frames to avoid excessive logging
+            // Only log at larger intervals and avoid logging consecutive frames
+            // Use acquired count as a throttle to avoid rapid consecutive logs
+            if acquired % 300 == 0 {
                 info!("SamplePool stats - created: {}, acquired: {}, released: {}, active: {}", 
                       created, acquired + 1, released, active);
             }
@@ -382,12 +396,12 @@ impl SamplePool {
         samples_for_texture.push(sample);
         
         #[cfg(debug_assertions)] {
-            self.released_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let acquired = self.acquired_count.load(std::sync::atomic::Ordering::SeqCst);
-            let released = self.released_count.load(std::sync::atomic::Ordering::SeqCst);
-            let active = acquired - released;
+            let released = self.released_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             
-            if active % 30 == 0 || active <= 0 {
+            // Only log occasionally to avoid spamming
+            if released % 300 == 0 {
+                let acquired = self.acquired_count.load(std::sync::atomic::Ordering::SeqCst);
+                let active = acquired - (released + 1);
                 debug!("SamplePool: After release - {} samples still active", active);
             }
         }

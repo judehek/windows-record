@@ -125,6 +125,5 @@ This will use all default settings and just specify the output file.
 
 ## Todo
 
-- Improve 60+ fps recording
 - More robust audio sync
 - Audio format configurability

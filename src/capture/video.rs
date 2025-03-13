@@ -1,4 +1,4 @@
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{SendError, Sender};
 use std::sync::Arc;
@@ -351,11 +351,16 @@ unsafe fn send_frame(
     // Create a pooled SendableSample that will return the sample to the pool when dropped
     let sendable = SendableSample::new_pooled(samp, texture, sample_pool.clone());
     
-    // Send the sample
-    send.send(sendable)
-        .map_err(|_| Error::from_win32())?;
-    
-    Ok(())
+    // Send the sample - if send fails, the sample will be automatically returned to the pool
+    // when sendable is dropped at the end of this function
+    match send.send(sendable) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            // The sample will be returned to the pool automatically when sendable is dropped
+            trace!("Failed to send frame (channel closed), sample will be returned to pool");
+            Err(Error::from_win32())
+        }
+    }
 }
 
 fn handle_frame_timing(
