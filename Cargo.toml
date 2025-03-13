@@ -7,7 +7,7 @@ authors = ["judehek"]
 license = "MIT"
 repository = "https://github.com/judehek/windows-record"
 readme = "README.md"
-keywords = ["windows", "recording", "screen capture", "audio", "video"]
+keywords = ["windows", "recording", "screen-capture", "audio", "video"]
 categories = ["multimedia", "multimedia::audio", "multimedia::video", "api-bindings"]
 
 [dependencies]
