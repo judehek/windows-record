@@ -1,16 +1,12 @@
 use log::info;
 use std::{env, time::Duration};
-use win_recorder::{AudioSource, Recorder, Result};
+use windows_record::{AudioSource, Recorder, Result};
 
 fn main() -> Result<()> {
     // Set up logging to see resource tracking in debug builds
     env::set_var("RUST_BACKTRACE", "full");
-    env::set_var("RUST_LOG", "info,win_recorder=info");
+    env::set_var("RUST_LOG", "info,windows_record=info");
     env_logger::init();
-
-    info!("OS: {}", env::consts::OS);
-    info!("Architecture: {}", env::consts::ARCH);
-    info!("Application started");
 
     // Create recorder
     let config = Recorder::builder()
@@ -48,18 +44,9 @@ fn main() -> Result<()> {
     info!("Recording for 10 seconds...");
     std::thread::sleep(Duration::from_secs(10));
     
-    // Stop recording and properly clean up resources
+    // Stop recording
     info!("Stopping recording");
-    match recorder.stop_recording() {
-        Ok(_) => info!("Recording stopped successfully"),
-        Err(e) => {
-            log::error!("Failed to stop recording: {:?}", e);
-            return Err(e);
-        }
-    }
-
-    // Explicitly drop the recorder to trigger resource cleanup
-    drop(recorder);
+    recorder.stop_recording()?;
     
     info!("Application finished - all resources properly cleaned up");
     Ok(())

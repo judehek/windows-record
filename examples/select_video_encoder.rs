@@ -1,17 +1,13 @@
 use std::time::Duration;
 use std::{env, io};
 use log::{error, info};
-use win_recorder::{enumerate_video_encoders, VideoEncoderType, Recorder, Result, RecorderConfig};
+use windows_record::{enumerate_video_encoders, VideoEncoderType, Recorder, Result, RecorderConfig};
 
 fn main() -> Result<()> {
     // Set up logging to see resource tracking in debug builds
     env::set_var("RUST_BACKTRACE", "full");
-    env::set_var("RUST_LOG", "info,win_recorder=info");
+    env::set_var("RUST_LOG", "info,windows_record=info");
     env_logger::init();
-
-    info!("OS: {}", env::consts::OS);
-    info!("Architecture: {}", env::consts::ARCH);
-    info!("Application started");
     
     // Get list of available video encoders
     let encoders = enumerate_video_encoders()?;
@@ -43,7 +39,7 @@ fn main() -> Result<()> {
         VideoEncoderType::HEVC => "H.265 (HEVC)",
     };
     
-    println!("Selected encoder: {}", encoder_name);
+    info!("Selected encoder: {}", encoder_name);
     
     // Create a recorder with the selected encoder
     let config = RecorderConfig::builder()
@@ -58,7 +54,7 @@ fn main() -> Result<()> {
     
     // Create and start the recorder
     let recorder = Recorder::new(config)?
-        .with_process_name("League of Legends (TM) Client");
+        .with_process_name("Chrome");
 
     info!("Starting recording with {} encoder.", encoder_name);
 
@@ -79,17 +75,8 @@ fn main() -> Result<()> {
     info!("Recording for 10 seconds...");
     std::thread::sleep(Duration::from_secs(10));
 
-    // Stop recording and properly clean up resources
-    info!("Stopping recording");
-    match recorder.stop_recording() {
-        Ok(_) => info!("Recording stopped successfully"),
-        Err(e) => {
-            error!("Failed to stop recording: {:?}", e);
-            return Err(e);
-        }
-    }
-
-    drop(recorder);
+    // Stop recording
+    recorder.stop_recording()?;
     
     Ok(())
 }

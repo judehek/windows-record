@@ -1,20 +1,20 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::{env, thread};
-use std::time::Duration;
-use win_recorder::{AudioSource, Recorder};
+use std::{env};
+use log::{error, info};
+use windows_record::{AudioSource, Recorder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     env::set_var("RUST_BACKTRACE", "full");
-    env::set_var("RUST_LOG", "info,win_recorder=info");
+    env::set_var("RUST_LOG", "info,windows_record=info");
     env_logger::init();
     
-    println!("=== Replay Buffer Example ===");
-    println!("This example demonstrates the replay buffer functionality.");
-    println!("- It will start a recording with the replay buffer enabled.");
-    println!("- Press 'S' to save the last 10 seconds as a replay.");
-    println!("- Press 'Q' to quit the program.");
+    info!("=== Replay Buffer Example ===");
+    info!("This example demonstrates the replay buffer functionality.");
+    info!("- It will start a recording with the replay buffer enabled.");
+    info!("- Press 'S' and 'return' to save the last 10 seconds as a replay.");
+    info!("- Press 'Q' and 'return' to quit the program.");
     
     // Get process name to record
     print!("Enter process name to record (e.g., 'notepad'): ");
@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let process_name = process_name.trim();
     
     if process_name.is_empty() {
-        println!("No process name provided. Exiting.");
+        info!("No process name provided. Exiting.");
         return Ok(());
     }
     
@@ -42,10 +42,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         
     let recorder = Recorder::new(recorder)?.with_process_name(process_name);
     
-    println!("Starting recording with replay buffer enabled...");
+    info!("Starting recording with replay buffer enabled...");
     recorder.start_recording()?;
     
-    println!("Recording started! Press 'S' to save replay, 'Q' to quit.");
+    info!("Recording started! Press 'S' to save replay, 'Q' to quit.");
     
     // Setup input handling for keypresses
     let mut replay_count = 0;
@@ -58,25 +58,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "S" => {
                 replay_count += 1;
                 let replay_path = format!("replay_{}.mp4", replay_count);
-                println!("Saving replay to {}", replay_path);
+                info!("Saving replay to {}", replay_path);
                 
                 match recorder.save_replay(&replay_path) {
-                    Ok(_) => println!("Replay saved successfully!"),
-                    Err(e) => println!("Failed to save replay: {}", e),
+                    Ok(_) => info!("Replay saved successfully!"),
+                    Err(e) => error!("Failed to save replay: {}", e),
                 }
             }
             "Q" => {
-                println!("Stopping recording...");
+                info!("Stopping recording...");
                 break;
             }
             _ => {
-                println!("Unknown command. Press 'S' to save replay, 'Q' to quit.");
+                info!("Unknown command. Press 'S' to save replay, 'Q' to quit.");
             }
         }
     }
     
     recorder.stop_recording()?;
-    println!("Recording stopped. Replays saved: {}", replay_count);
+    info!("Recording stopped. Replays saved: {}", replay_count);
     
     Ok(())
 }

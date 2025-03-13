@@ -1,5 +1,5 @@
 [package]
-name = "win-recorder"
+name = "windows-record"
 version = "0.1.0"
 edition = "2021"
 

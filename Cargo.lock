@@ -224,17 +224,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
-name = "win-recorder"
-version = "0.1.0"
-dependencies = [
- "env_logger",
- "log",
- "spin_sleep",
- "thiserror",
- "windows",
-]
-
-[[package]]
 name = "windows"
 version = "0.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -265,6 +254,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "windows-record"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "log",
+ "spin_sleep",
+ "thiserror",
+ "windows",
 ]
 
 [[package]]

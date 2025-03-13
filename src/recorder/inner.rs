@@ -1,5 +1,4 @@
 use log::{error, info};
-use windows::Win32::Media::MediaFoundation::IMFSample;
 use windows::Win32::System::Performance::QueryPerformanceCounter;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
