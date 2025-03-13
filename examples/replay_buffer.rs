@@ -35,6 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .output_path(PathBuf::from("recording.mp4"))
         .capture_audio(true)
         .audio_source(AudioSource::Desktop)
+        .capture_microphone(true)
         .enable_replay_buffer(true)
         .replay_buffer_seconds(10) // Keep last 10 seconds in buffer
         .build();
