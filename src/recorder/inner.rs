@@ -330,10 +330,10 @@ impl RecorderInner {
                 let normalized_timestamp = timestamp - earliest_timestamp;
                 
                 // Set the normalized timestamp directly on the sample
-                sample.0.SetSampleTime(normalized_timestamp)?;
+                sample.SetSampleTime(normalized_timestamp)?;
                 
                 // Write the sample with the normalized timestamp
-                media_sink.WriteSample(video_stream_index, &*sample.0)?;
+                media_sink.WriteSample(video_stream_index, &**sample)?;
             }
             
             // Write audio samples with normalized timestamps
@@ -344,10 +344,10 @@ impl RecorderInner {
                     let normalized_timestamp = timestamp - earliest_timestamp;
                     
                     // Set the normalized timestamp directly on the sample
-                    sample.0.SetSampleTime(normalized_timestamp)?;
+                    sample.SetSampleTime(normalized_timestamp)?;
                     
                     // Write the sample with the normalized timestamp
-                    media_sink.WriteSample(audio_stream_index, &*sample.0)?;
+                    media_sink.WriteSample(audio_stream_index, &**sample)?;
                 }
             }
             

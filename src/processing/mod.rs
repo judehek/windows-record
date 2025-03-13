@@ -99,21 +99,22 @@ pub fn process_samples(
             Ok(samp) => {
                 had_work = true;
                 // Extract timestamp for the replay buffer
-                let timestamp: i64 = unsafe { samp.0.GetSampleTime() }?;
+                let timestamp: i64 = unsafe { samp.sample.GetSampleTime() }?;
                 
                 // Convert and write to file as usual
                 let converted = unsafe {
                     video::convert_bgra_to_nv12(
                         &device, 
                         &converter, 
-                        &*samp.0, 
+                        &*samp.sample, 
                         output_width,
                         output_height
                     )?
                 };
                 // Add to replay buffer if enabled
                 if let Some(buffer) = &replay_buffer {
-                    buffer.add_video_sample(SendableSample(Arc::new(converted.clone())), timestamp)?;
+                    // Clone the IMFSample directly
+                    buffer.add_video_sample(SendableSample::new(converted.clone()), timestamp)?;
                 }
                 unsafe { writer.0.WriteSample(video_stream_index, &converted)? };
 
@@ -140,12 +141,14 @@ pub fn process_samples(
                     had_work = true;
                     
                     // Extract timestamp for the replay buffer
-                    let timestamp: i64 = unsafe { audio_samp.0.GetSampleTime() }?;
+                    let timestamp: i64 = unsafe { audio_samp.sample.GetSampleTime() }?;
                     
                     // Only add to replay buffer if we're NOT mixing (otherwise we'll add the mixed sample later)
                     if audio_mixer.is_none() {
                         if let Some(buffer) = &replay_buffer {
-                            buffer.add_audio_sample(SendableSample(Arc::clone(&audio_samp.0)), timestamp)?;
+                            // Clone the IMFSample from the Arc
+                            let cloned_sample = unsafe { audio_samp.sample.as_ref().clone() };
+                            buffer.add_audio_sample(SendableSample::new(cloned_sample), timestamp)?;
                         }
                     }
                     
@@ -155,7 +158,7 @@ pub fn process_samples(
                     } else if let Some(stream_index) = audio_stream_index {
                         // Write directly if no mixing needed
                         let write_start = std::time::Instant::now();
-                        unsafe { writer.0.WriteSample(stream_index, &*audio_samp.0)? };
+                        unsafe { writer.0.WriteSample(stream_index, &*audio_samp.sample)? };
                         debug!(
                             "Process audio sample written in {:?}",
                             write_start.elapsed()
@@ -178,12 +181,14 @@ pub fn process_samples(
                     had_work = true;
                     
                     // Extract timestamp for the replay buffer
-                    let timestamp: i64 = unsafe { mic_samp.0.GetSampleTime() }?;
+                    let timestamp: i64 = unsafe { mic_samp.sample.GetSampleTime() }?;
                     
                     // Only add to replay buffer if we're NOT mixing
                     if audio_mixer.is_none() {
                         if let Some(buffer) = &replay_buffer {
-                            buffer.add_audio_sample(SendableSample(Arc::clone(&mic_samp.0)), timestamp)?;
+                            // Clone the IMFSample from the Arc
+                            let cloned_sample = unsafe { mic_samp.sample.as_ref().clone() };
+                            buffer.add_audio_sample(SendableSample::new(cloned_sample), timestamp)?;
                         }
                     }
                     
@@ -192,7 +197,7 @@ pub fn process_samples(
                         mixer.add_microphone_audio(mic_samp);
                     } else if let Some(stream_index) = audio_stream_index {
                         let write_start = std::time::Instant::now();
-                        unsafe { writer.0.WriteSample(stream_index, &*mic_samp.0)? };
+                        unsafe { writer.0.WriteSample(stream_index, &*mic_samp.sample)? };
                         debug!("Microphone sample written in {:?}", write_start.elapsed());
                     }
                 }
@@ -228,7 +233,9 @@ pub fn process_samples(
                                             .as_nanos() as i64
                                     })
                                 };
-                                buffer.add_audio_sample(SendableSample(Arc::clone(&mixed_sample)), timestamp)?;
+                                // Extract the IMFSample from the Arc
+                                let cloned_sample = unsafe { mixed_sample.as_ref().clone() };
+                                buffer.add_audio_sample(SendableSample::new(cloned_sample), timestamp)?;
                             }
                             
                             // Write the mixed sample

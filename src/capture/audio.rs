@@ -216,7 +216,7 @@ pub unsafe fn collect_audio(
                             packet_duration_hns,
                         ) {
                             Ok(sample) => {
-                                if let Err(e) = send.send(SendableSample(Arc::new(sample))) {
+                                if let Err(e) = send.send(SendableSample::new(sample)) {
                                     info!("Failed to send audio sample, receiver likely dropped: {:?}", e);
                                     return Err(E_FAIL.into());
                                 }

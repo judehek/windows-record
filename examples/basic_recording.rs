@@ -42,7 +42,7 @@ fn main() -> Result<()> {
 
     // Record for 10 seconds
     info!("Recording for 10 seconds...");
-    std::thread::sleep(Duration::from_secs(10));
+    std::thread::sleep(Duration::from_secs(180));
     
     // Stop recording
     info!("Stopping recording");
