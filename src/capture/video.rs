@@ -13,7 +13,7 @@ use windows::Win32::System::Threading::*;
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 use super::dxgi::{create_blank_dxgi_texture, setup_dxgi_duplication};
-use super::window::{find_window_by_substring, is_window_valid, get_window_title};
+use super::window::{get_window_by_string, is_window_valid, get_window_title};
 use crate::capture::dxgi::create_staging_texture;
 use crate::processing::media::create_dxgi_sample;
 use crate::types::{SendableSample, TexturePool};
@@ -75,7 +75,7 @@ impl WindowTracker {
         
         // If not, try to find the window again
         debug!("Window handle no longer valid, attempting to find '{}' again", self.process_name);
-        if let Some(new_hwnd) = find_window_by_substring(&self.process_name) {
+        if let Some(new_hwnd) = get_window_by_string(&self.process_name) {
             debug!("Found window again with new handle: {:?}", new_hwnd);
             self.hwnd = new_hwnd;
             return true;
@@ -107,7 +107,7 @@ impl From<WindowsError> for FrameError {
     }
 }
 
-pub unsafe fn collect_frames(
+pub unsafe fn get_frames(
     send: Sender<SendableSample>,
     recording: Arc<AtomicBool>,
     hwnd: HWND,
@@ -166,13 +166,13 @@ pub unsafe fn collect_frames(
         if !window_tracker.ensure_valid_window() {
             // Window is no longer valid, try to find it again
             warn!("Window no longer valid, attempting to find '{}'", process_name);
-            if let Some(new_hwnd) = find_window_by_substring(process_name) {
+            if let Some(new_hwnd) = get_window_by_string(process_name) {
                 info!("Found window '{}' again, continuing recording", process_name);
                 window_tracker = WindowTracker::new(new_hwnd, process_name);
             } else {
                 // Can't find window, wait and retry
                 warn!("Window '{}' not found, will retry", process_name);
-                //spin_sleep::sleep(Duration::from_secs(1));
+                spin_sleep::sleep(Duration::from_millis(1));
                 continue;
             }
         }

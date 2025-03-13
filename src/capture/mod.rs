@@ -6,5 +6,5 @@ mod microphone;
 
 pub use audio::collect_audio;
 pub use microphone::collect_microphone;
-pub use video::collect_frames;
-pub use window::find_window_by_substring;
+pub use video::get_frames;
+pub use window::get_window_by_string;
