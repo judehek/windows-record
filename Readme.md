@@ -10,6 +10,11 @@ Windows Record is an efficient Rust library designed for seamless window recordi
 - Replay buffering (similar to ShadowPlay)
 - Fully configurable
 
+## Installation
+```
+cargo add windows-record
+```
+
 ## Usage Example
 
 ```rust
