@@ -211,28 +211,7 @@ unsafe fn create_audio_output_type() -> Result<IMFMediaType> {
     Ok(output_type)
 }
 
-pub unsafe fn create_dxgi_sample(texture: &ID3D11Texture2D, fps_num: u32) -> Result<IMFSample> {
-    // Cast the texture to an IDXGISurface
-    let surface: IDXGISurface = texture.cast()?;
-
-    // Create a new Media Foundation sample
-    let sample: IMFSample = MFCreateSample()?;
-    
-    // Create a DXGI buffer from the surface
-    let buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &surface, 0, TRUE)?;
-    
-    // Add the buffer to the sample
-    sample.AddBuffer(&buffer)?;
-    
-    // Set the sample duration based on the frame rate
-    sample.SetSampleDuration(10_000_000 / fps_num as i64)?;
-
-    // Explicitly release the surface to avoid a reference leak
-    // The buffer still maintains its reference to the underlying resource
-    drop(surface);
-    
-    Ok(sample)
-}
+// The create_dxgi_sample function has been moved to SamplePool in types/mod.rs
 
 pub unsafe fn init_media_foundation() -> Result<()> {
     use windows::Win32::System::Com::*;

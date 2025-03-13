@@ -8,7 +8,7 @@ struct SearchContext {
     result: AtomicIsize,
 }
 
-pub fn find_window_by_substring(substring: &str) -> Option<HWND> {
+pub fn get_window_by_string(substring: &str) -> Option<HWND> {
     let context = SearchContext {
         substring: substring.to_lowercase(),
         result: AtomicIsize::new(0),
@@ -16,7 +16,7 @@ pub fn find_window_by_substring(substring: &str) -> Option<HWND> {
 
     unsafe {
         windows::Win32::UI::WindowsAndMessaging::EnumWindows(
-            Some(enum_window_proc),
+            Some(window_enumeration_callback),
             LPARAM(&context as *const _ as isize),
         );
     }
@@ -59,7 +59,7 @@ pub fn get_window_title(hwnd: HWND) -> String {
     }
 }
 
-unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+unsafe extern "system" fn window_enumeration_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let context = &*(lparam.0 as *const SearchContext);
     
     // Skip windows that aren't visible

@@ -1,4 +1,4 @@
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{SendError, Sender};
 use std::sync::Arc;
@@ -13,10 +13,9 @@ use windows::Win32::System::Threading::*;
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 use super::dxgi::{create_blank_dxgi_texture, setup_dxgi_duplication};
-use super::window::{find_window_by_substring, is_window_valid, get_window_title};
+use super::window::{get_window_by_string, is_window_valid, get_window_title};
 use crate::capture::dxgi::create_staging_texture;
-use crate::processing::media::create_dxgi_sample;
-use crate::types::{SendableSample, TexturePool};
+use crate::types::{SendableSample, TexturePool, SamplePool};
 
 /// Struct to manage window target state
 struct WindowTracker {
@@ -75,7 +74,7 @@ impl WindowTracker {
         
         // If not, try to find the window again
         debug!("Window handle no longer valid, attempting to find '{}' again", self.process_name);
-        if let Some(new_hwnd) = find_window_by_substring(&self.process_name) {
+        if let Some(new_hwnd) = get_window_by_string(&self.process_name) {
             debug!("Found window again with new handle: {:?}", new_hwnd);
             self.hwnd = new_hwnd;
             return true;
@@ -107,7 +106,7 @@ impl From<WindowsError> for FrameError {
     }
 }
 
-pub unsafe fn collect_frames(
+pub unsafe fn get_frames(
     send: Sender<SendableSample>,
     recording: Arc<AtomicBool>,
     hwnd: HWND,
@@ -153,6 +152,10 @@ pub unsafe fn collect_frames(
         0, // Misc flags
     )?;
     let texture_pool = Arc::new(texture_pool);
+    
+    // Create a pool for IMFSample objects that are bound to the textures
+    let sample_pool = SamplePool::new(fps_num, 10);
+    let sample_pool = Arc::new(sample_pool);
 
     // Signal that we're ready
     started.wait();
@@ -166,13 +169,13 @@ pub unsafe fn collect_frames(
         if !window_tracker.ensure_valid_window() {
             // Window is no longer valid, try to find it again
             warn!("Window no longer valid, attempting to find '{}'", process_name);
-            if let Some(new_hwnd) = find_window_by_substring(process_name) {
+            if let Some(new_hwnd) = get_window_by_string(process_name) {
                 info!("Found window '{}' again, continuing recording", process_name);
                 window_tracker = WindowTracker::new(new_hwnd, process_name);
             } else {
                 // Can't find window, wait and retry
                 warn!("Window '{}' not found, will retry", process_name);
-                //spin_sleep::sleep(Duration::from_secs(1));
+                spin_sleep::sleep(Duration::from_millis(1));
                 continue;
             }
         }
@@ -193,6 +196,7 @@ pub unsafe fn collect_frames(
             &mut accumulated_delay,
             &mut num_duped,
             &texture_pool,
+            &sample_pool,
         ) {
             Ok(_) => {
                 frame_count += 1;
@@ -249,6 +253,7 @@ unsafe fn process_frame(
     accumulated_delay: &mut Duration,
     num_duped: &mut u64,
     texture_pool: &Arc<TexturePool>,
+    sample_pool: &Arc<SamplePool>,
 ) -> std::result::Result<(), FrameError> {
     let mut resource: Option<IDXGIResource> = None;
     let mut info = windows::Win32::Graphics::Dxgi::DXGI_OUTDUPL_FRAME_INFO::default();
@@ -314,14 +319,14 @@ unsafe fn process_frame(
     // Handle frame timing and duplication
     while *accumulated_delay >= frame_duration {
         debug!("Duping a frame to catch up");
-        send_frame(staging_texture, fps_num, frame_count, send)
+        send_frame(staging_texture, frame_count, send, sample_pool)
             .map_err(|_| FrameError::ChannelClosed)?;
         *next_frame_time += frame_duration;
         *accumulated_delay -= frame_duration;
         *num_duped += 1;
     }
     
-    send_frame(staging_texture, fps_num, frame_count, send)
+    send_frame(staging_texture, frame_count, send, sample_pool)
         .map_err(|_| FrameError::ChannelClosed)?;
     *next_frame_time += frame_duration;
     
@@ -333,19 +338,29 @@ unsafe fn process_frame(
 
 unsafe fn send_frame(
     texture: &ID3D11Texture2D,
-    fps_num: u32,
     frame_count: u64,
     send: &Sender<SendableSample>,
+    sample_pool: &Arc<SamplePool>,
 ) -> Result<()> {
-    // Create a Media Foundation sample from the texture
-    let samp = create_dxgi_sample(texture, fps_num)?;
-    samp.SetSampleTime((frame_count as i64 * 10_000_000i64 / fps_num as i64) as i64)?;
+    // Get a sample from the pool instead of creating a new one each time
+    let samp = sample_pool.acquire_for_texture(texture)?;
     
-    // Send the sample
-    send.send(SendableSample(Arc::new(samp)))
-        .map_err(|_| Error::from_win32())?;
+    // Set the sample time based on frame count
+    sample_pool.set_sample_time(&samp, frame_count)?;
     
-    Ok(())
+    // Create a pooled SendableSample that will return the sample to the pool when dropped
+    let sendable = SendableSample::new_pooled(samp, texture, sample_pool.clone());
+    
+    // Send the sample - if send fails, the sample will be automatically returned to the pool
+    // when sendable is dropped at the end of this function
+    match send.send(sendable) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            // The sample will be returned to the pool automatically when sendable is dropped
+            trace!("Failed to send frame (channel closed), sample will be returned to pool");
+            Err(Error::from_win32())
+        }
+    }
 }
 
 fn handle_frame_timing(

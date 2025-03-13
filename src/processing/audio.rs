@@ -74,7 +74,7 @@ impl AudioMixer {
             let mic_sample = self.microphone_queue.pop_front().unwrap();
             
             // Mix the samples
-            match self.mix_samples(&sys_sample.0, &mic_sample.0) {
+            match self.mix_samples(&sys_sample.sample, &mic_sample.sample) {
                 Ok(mixed) => {
                     debug!("Successfully mixed audio samples");
                     Some(Ok(Arc::new(mixed)))
@@ -101,11 +101,11 @@ impl AudioMixer {
                 // If volume is 1.0 (default), no need to process
                 if (self.microphone_volume - 1.0).abs() < 0.001 {
                     debug!("Using default microphone volume, passing through");
-                    return Some(Ok(mic_sample.0));
+                    return Some(Ok(mic_sample.sample.clone()));
                 }
                 
                 // Apply microphone volume
-                match self.apply_volume_to_sample(&mic_sample.0, self.microphone_volume) {
+                match self.apply_volume_to_sample(&mic_sample.sample, self.microphone_volume) {
                     Ok(processed) => {
                         debug!("Successfully applied volume to microphone sample");
                         return Some(Ok(Arc::new(processed)));
@@ -125,11 +125,11 @@ impl AudioMixer {
                 // If volume is 1.0 (default), no need to process
                 if (self.system_volume - 1.0).abs() < 0.001 {
                     debug!("Using default system volume, passing through");
-                    return Some(Ok(sys_sample.0));
+                    return Some(Ok(sys_sample.sample.clone()));
                 }
                 
                 // Apply system volume
-                match self.apply_volume_to_sample(&sys_sample.0, self.system_volume) {
+                match self.apply_volume_to_sample(&sys_sample.sample, self.system_volume) {
                     Ok(processed) => {
                         debug!("Successfully applied volume to system sample");
                         return Some(Ok(Arc::new(processed)));

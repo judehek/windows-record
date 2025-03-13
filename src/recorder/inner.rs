@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 
 use super::config::RecorderConfig;
-use crate::capture::{collect_audio, collect_frames, collect_microphone, find_window_by_substring};
+use crate::capture::{collect_audio, get_frames, collect_microphone, get_window_by_string};
 use crate::device::{get_audio_input_device_by_name, get_video_encoder_by_type};
 use crate::error::RecorderError;
 use crate::processing::{media, process_samples};
@@ -113,7 +113,7 @@ impl RecorderInner {
             )?;
 
             // Find target window
-            let hwnd = find_window_by_substring(process_name)
+            let hwnd = get_window_by_string(process_name)
                 .ok_or_else(|| RecorderError::FailedToStart("No window found".to_string()))?;
 
             // Get the process ID
@@ -149,7 +149,7 @@ impl RecorderInner {
             let barrier_clone = barrier.clone();
             let process_name_clone = process_name.to_string();
             collect_video_handle = Some(std::thread::spawn(move || {
-                collect_frames(
+                get_frames(
                     sender_video,
                     rec_clone,
                     hwnd,
@@ -330,10 +330,10 @@ impl RecorderInner {
                 let normalized_timestamp = timestamp - earliest_timestamp;
                 
                 // Set the normalized timestamp directly on the sample
-                sample.0.SetSampleTime(normalized_timestamp)?;
+                sample.SetSampleTime(normalized_timestamp)?;
                 
                 // Write the sample with the normalized timestamp
-                media_sink.WriteSample(video_stream_index, &*sample.0)?;
+                media_sink.WriteSample(video_stream_index, &**sample)?;
             }
             
             // Write audio samples with normalized timestamps
@@ -344,10 +344,10 @@ impl RecorderInner {
                     let normalized_timestamp = timestamp - earliest_timestamp;
                     
                     // Set the normalized timestamp directly on the sample
-                    sample.0.SetSampleTime(normalized_timestamp)?;
+                    sample.SetSampleTime(normalized_timestamp)?;
                     
                     // Write the sample with the normalized timestamp
-                    media_sink.WriteSample(audio_stream_index, &*sample.0)?;
+                    media_sink.WriteSample(audio_stream_index, &**sample)?;
                 }
             }
             
