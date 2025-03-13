@@ -40,7 +40,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .replay_buffer_seconds(10) // Keep last 10 seconds in buffer
         .build();
         
-    let recorder = Recorder::new(recorder)?.with_process_name(process_name);
+    let recorder = Recorder::new(recorder)?
+        .with_process_name(process_name)
+        .case_sensitive(false)
+        .exact_match(false);
     
     info!("Starting recording with replay buffer enabled...");
     recorder.start_recording()?;

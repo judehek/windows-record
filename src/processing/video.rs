@@ -89,11 +89,8 @@ pub unsafe fn convert_bgra_to_nv12(
     // Create NV12 texture and output sample
     let (nv12_texture, output_sample) = create_nv12_output(device, output_width, output_height)?;
 
-    // Process the frame - removed unnecessary flush between frames
+    // Process the frame
     converter.ProcessInput(0, sample, 0)?;
-    
-    // No drain command here - only drain when necessary (end of sequence or format change)
-    // converter.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
 
     let mut output = MFT_OUTPUT_DATA_BUFFER {
         pSample: ManuallyDrop::new(Some(output_sample)),
@@ -158,7 +155,7 @@ unsafe fn create_nv12_output(
         // Added D3D11_BIND_RENDER_TARGET for potential direct rendering if needed
         BindFlags: D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
         CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(0),
-        // Optional: Add SHARED flag if you need interop capabilities
+        // SHARED flag if you need interop capabilities
         // MiscFlags: D3D11_RESOURCE_MISC_SHARED,
         MiscFlags: D3D11_RESOURCE_MISC_FLAG(0),
     };
@@ -186,7 +183,7 @@ unsafe fn create_nv12_output(
     Ok((nv12_texture, output_sample))
 }
 
-// Optional helper function to flush the converter when changing formats or at stream boundaries
+// Helper function to flush the converter when changing formats or at stream boundaries
 pub unsafe fn flush_converter(converter: &IMFTransform) -> Result<()> {
     converter.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
     converter.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;

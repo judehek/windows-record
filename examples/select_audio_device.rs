@@ -53,7 +53,9 @@ fn main() -> Result<()> {
     
     // Create and start the recorder
     let recorder = Recorder::new(config)?
-        .with_process_name("Chrome");
+        .with_process_name("Chrome")
+        .case_sensitive(false)
+        .exact_match(false);
 
     info!("Starting recording with{} microphone device.", 
         if selected_device.is_some() { " selected" } else { " default" });

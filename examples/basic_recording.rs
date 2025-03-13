@@ -25,7 +25,9 @@ fn main() -> Result<()> {
     // Create the recorder with your target window name
     // For this example, use a window that's currently open on your system
     let recorder = Recorder::new(config)?
-        .with_process_name("Chrome");
+        .with_process_name("Chrome")
+        .case_sensitive(false)
+        .exact_match(false);
 
     // Short delay before starting recording
     std::thread::sleep(Duration::from_secs(1));
