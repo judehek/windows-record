@@ -1,11 +1,13 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::thread;
+use std::{env, thread};
 use std::time::Duration;
 use win_recorder::{AudioSource, Recorder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
+    env::set_var("RUST_BACKTRACE", "full");
+    env::set_var("RUST_LOG", "info,win_recorder=info");
     env_logger::init();
     
     println!("=== Replay Buffer Example ===");

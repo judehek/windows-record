@@ -99,12 +99,7 @@ pub fn process_samples(
             Ok(samp) => {
                 had_work = true;
                 // Extract timestamp for the replay buffer
-                let mut timestamp: i64 = unsafe { samp.0.GetSampleTime() }?;
-                
-                // Add to replay buffer if enabled
-                if let Some(buffer) = &replay_buffer {
-                    buffer.add_video_sample(SendableSample(Arc::clone(&samp.0)), timestamp)?;
-                }
+                let timestamp: i64 = unsafe { samp.0.GetSampleTime() }?;
                 
                 // Convert and write to file as usual
                 let converted = unsafe {
@@ -116,6 +111,10 @@ pub fn process_samples(
                         output_height
                     )?
                 };
+                // Add to replay buffer if enabled
+                if let Some(buffer) = &replay_buffer {
+                    buffer.add_video_sample(SendableSample(Arc::new(converted.clone())), timestamp)?;
+                }
                 unsafe { writer.0.WriteSample(video_stream_index, &converted)? };
 
                 frame_count += 1;
@@ -141,11 +140,13 @@ pub fn process_samples(
                     had_work = true;
                     
                     // Extract timestamp for the replay buffer
-                    let mut timestamp: i64 = unsafe { audio_samp.0.GetSampleTime() }?;
+                    let timestamp: i64 = unsafe { audio_samp.0.GetSampleTime() }?;
                     
-                    // Add to replay buffer if enabled
-                    if let Some(buffer) = &replay_buffer {
-                        buffer.add_audio_sample(SendableSample(Arc::clone(&audio_samp.0)), timestamp)?;
+                    // Only add to replay buffer if we're NOT mixing (otherwise we'll add the mixed sample later)
+                    if audio_mixer.is_none() {
+                        if let Some(buffer) = &replay_buffer {
+                            buffer.add_audio_sample(SendableSample(Arc::clone(&audio_samp.0)), timestamp)?;
+                        }
                     }
                     
                     if let Some(mixer) = &mut audio_mixer {
@@ -161,6 +162,7 @@ pub fn process_samples(
                         );
                     }
                 }
+                // Error handling remains the same
                 Err(TryRecvError::Empty) => {}
                 Err(e) => {
                     error!("Audio channel disconnected: {:?}", e);
@@ -176,23 +178,25 @@ pub fn process_samples(
                     had_work = true;
                     
                     // Extract timestamp for the replay buffer
-                    let mut timestamp: i64 = unsafe { mic_samp.0.GetSampleTime() }?;
+                    let timestamp: i64 = unsafe { mic_samp.0.GetSampleTime() }?;
                     
-                    // Add to replay buffer if enabled
-                    if let Some(buffer) = &replay_buffer {
-                        buffer.add_audio_sample(SendableSample(Arc::clone(&mic_samp.0)), timestamp)?;
+                    // Only add to replay buffer if we're NOT mixing
+                    if audio_mixer.is_none() {
+                        if let Some(buffer) = &replay_buffer {
+                            buffer.add_audio_sample(SendableSample(Arc::clone(&mic_samp.0)), timestamp)?;
+                        }
                     }
                     
+                    // Rest remains the same
                     if let Some(mixer) = &mut audio_mixer {
-                        // Add to mixer if we need to mix
                         mixer.add_microphone_audio(mic_samp);
                     } else if let Some(stream_index) = audio_stream_index {
-                        // Write directly if no mixing needed
                         let write_start = std::time::Instant::now();
                         unsafe { writer.0.WriteSample(stream_index, &*mic_samp.0)? };
                         debug!("Microphone sample written in {:?}", write_start.elapsed());
                     }
                 }
+                // Error handling remains the same
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
                     error!("Microphone channel disconnected");
@@ -210,6 +214,23 @@ pub fn process_samples(
                     match mixed_result {
                         Ok(mixed_sample) => {
                             let write_start = std::time::Instant::now();
+                            
+                            // Add mixed sample to replay buffer with current timestamp
+                            // You might need to use a timestamp from one of the original sources or create one
+                            if let Some(buffer) = &replay_buffer {
+                                // Get timestamp from the sample if possible or use system time
+                                let timestamp = unsafe { 
+                                    mixed_sample.GetSampleTime().unwrap_or_else(|_| {
+                                        // Fallback to system time if GetSampleTime fails
+                                        std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_nanos() as i64
+                                    })
+                                };
+                                buffer.add_audio_sample(SendableSample(Arc::clone(&mixed_sample)), timestamp)?;
+                            }
+                            
                             // Write the mixed sample
                             unsafe { writer.0.WriteSample(stream_index, &*mixed_sample)? };
                             debug!("Mixed audio sample written in {:?}", write_start.elapsed());

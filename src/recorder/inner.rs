@@ -282,7 +282,7 @@ impl RecorderInner {
             let now = std::time::Instant::now();
             let video_samples = buffer.get_video_samples(oldest_timestamp, i64::MAX);
             let audio_samples = buffer.get_audio_samples(oldest_timestamp, i64::MAX);
-            info!("Retrieved {} video frames and {} audio samples in {:?}", 
+            info!("Retrieved {} video frames and {} audio samples in {:?}",
                 video_samples.len(), audio_samples.len(), now.elapsed());
             
             if video_samples.is_empty() {
@@ -302,9 +302,11 @@ impl RecorderInner {
                 self.config.video_bitrate(),
                 &video_encoder.id,
             )?;
+            info!("Created sink writer");
             
             // Begin writing
             media_sink.BeginWriting()?;
+            info!("Began writing");
             
             // Define stream indices
             let video_stream_index = 0;
