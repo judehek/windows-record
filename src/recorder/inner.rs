@@ -1,4 +1,5 @@
 use log::{error, info};
+use windows::Win32::Media::MediaFoundation::IMFSample;
 use windows::Win32::System::Performance::QueryPerformanceCounter;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -288,7 +289,7 @@ impl RecorderInner {
             if video_samples.is_empty() {
                 return Err(RecorderError::Generic("No video frames in replay buffer".to_string()));
             }
-
+    
             let video_encoder = get_video_encoder_by_type(self.config.video_encoder())?;
                 
             let media_sink = media::create_sink_writer(
@@ -312,16 +313,41 @@ impl RecorderInner {
             let video_stream_index = 0;
             let audio_stream_index = if !audio_samples.is_empty() { 1 } else { 0 };
             
-            // Write video samples
+            // Find the earliest timestamp to use as a reference for normalization
+            let earliest_timestamp = if !video_samples.is_empty() {
+                video_samples[0].1
+            } else if !audio_samples.is_empty() {
+                audio_samples[0].1
+            } else {
+                oldest_timestamp
+            };
+            
+            info!("Normalizing timestamps, earliest: {}", earliest_timestamp);
+            
+            // Write video samples with normalized timestamps
             info!("Writing {} video frames to replay file", video_samples.len());
-            for (sample, _) in video_samples {
+            for (sample, timestamp) in video_samples {
+                // Calculate normalized timestamp (relative to the earliest timestamp)
+                let normalized_timestamp = timestamp - earliest_timestamp;
+                
+                // Set the normalized timestamp directly on the sample
+                sample.0.SetSampleTime(normalized_timestamp)?;
+                
+                // Write the sample with the normalized timestamp
                 media_sink.WriteSample(video_stream_index, &*sample.0)?;
             }
             
-            // Write audio samples
+            // Write audio samples with normalized timestamps
             if !audio_samples.is_empty() {
                 info!("Writing {} audio samples to replay file", audio_samples.len());
-                for (sample, _) in audio_samples {
+                for (sample, timestamp) in audio_samples {
+                    // Calculate normalized timestamp (relative to the earliest timestamp)
+                    let normalized_timestamp = timestamp - earliest_timestamp;
+                    
+                    // Set the normalized timestamp directly on the sample
+                    sample.0.SetSampleTime(normalized_timestamp)?;
+                    
+                    // Write the sample with the normalized timestamp
                     media_sink.WriteSample(audio_stream_index, &*sample.0)?;
                 }
             }

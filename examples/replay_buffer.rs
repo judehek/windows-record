@@ -32,7 +32,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create recorder with replay buffer enabled
     let recorder = Recorder::builder()
         .fps(30, 1)
-        .video_bitrate(5_000_000)
         .output_path(PathBuf::from("recording.mp4"))
         .capture_audio(true)
         .audio_source(AudioSource::Desktop)
