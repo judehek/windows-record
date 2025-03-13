@@ -5,7 +5,7 @@ mod inner;
 pub use self::config::{RecorderConfig, RecorderConfigBuilder, AudioSource};
 
 use self::inner::RecorderInner;
-use crate::{capture::{list_all_visible_windows, WindowSearchOptions}, error::{RecorderError, Result}};
+use crate::error::{RecorderError, Result};
 use log::info;
 use std::cell::RefCell;
 
@@ -13,7 +13,6 @@ pub struct Recorder {
     rec_inner: RefCell<Option<RecorderInner>>,
     config: RecorderConfig,
     process_name: RefCell<Option<String>>,
-    window_search_options: RefCell<WindowSearchOptions>,
 }
 
 impl Recorder {
@@ -23,7 +22,6 @@ impl Recorder {
             rec_inner: RefCell::new(None),
             config,
             process_name: RefCell::new(None),
-            window_search_options: RefCell::new(WindowSearchOptions::default()),
         })
     }
 
@@ -32,31 +30,10 @@ impl Recorder {
         RecorderConfig::builder()
     }
 
-    // Keep the original method for backward compatibility
+    // Set the process name to record
     pub fn with_process_name(self, proc_name: &str) -> Self {
         *self.process_name.borrow_mut() = Some(proc_name.to_string());
         self
-    }
-
-    // Customize window search options
-    pub fn with_window_search_options(self, options: WindowSearchOptions) -> Self {
-        *self.window_search_options.borrow_mut() = options;
-        self
-    }
-
-    pub fn case_sensitive(self, value: bool) -> Self {
-        self.window_search_options.borrow_mut().case_sensitive = value;
-        self
-    }
-
-    pub fn exact_match(self, value: bool) -> Self {
-        self.window_search_options.borrow_mut().exact_match = value;
-        self
-    }
-
-    // Helper method to list all visible windows for debugging
-    pub fn list_available_windows() -> Vec<String> {
-        list_all_visible_windows().into_iter().collect()
     }
 
     // Begin recording

@@ -27,9 +27,7 @@ fn main() -> Result<()> {
 
     // Initialize with target window
     let recorder = Recorder::new(config)?
-        .with_process_name("Your Window Name")
-        .case_sensitive(false)
-        .exact_match(false);
+        .with_process_name("Your Window Name");
 
     // Start recording
     recorder.start_recording()?;
@@ -62,9 +60,7 @@ fn main() -> Result<()> {
 
     // Initialize with target window
     let recorder = Recorder::new(config)?
-        .with_process_name("Your Window Name")
-        .case_sensitive(false)
-        .exact_match(false);
+        .with_process_name("Your Window Name");
 
     // Start recording with buffer
     recorder.start_recording()?;

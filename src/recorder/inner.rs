@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 
 use super::config::RecorderConfig;
-use crate::capture::{collect_audio, get_frames, collect_microphone, get_window_by_text};
+use crate::capture::{collect_audio, get_frames, collect_microphone, get_window_by_string};
 use crate::device::{get_audio_input_device_by_name, get_video_encoder_by_type};
 use crate::error::RecorderError;
 use crate::processing::{media, process_samples};
@@ -113,8 +113,7 @@ impl RecorderInner {
             )?;
 
             // Find target window
-            let hwnd = get_window_by_text(process_name)
-                .map(|window_handle| window_handle.as_raw())
+            let hwnd = get_window_by_string(process_name)
                 .ok_or_else(|| RecorderError::FailedToStart("No window found".to_string()))?;
 
             // Get the process ID

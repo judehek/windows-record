@@ -54,9 +54,7 @@ fn main() -> Result<()> {
     
     // Create and start the recorder
     let recorder = Recorder::new(config)?
-        .with_process_name("Chrome")
-        .case_sensitive(false)
-        .exact_match(false);
+        .with_process_name("Chrome");
 
     info!("Starting recording with {} encoder.", encoder_name);
 
