@@ -1,4 +1,5 @@
 use log::{error, info};
+use windows::Win32::Media::MediaFoundation::IMFSample;
 use windows::Win32::System::Performance::QueryPerformanceCounter;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,7 +16,7 @@ use crate::capture::{collect_audio, collect_frames, collect_microphone, find_win
 use crate::device::{get_audio_input_device_by_name, get_video_encoder_by_type};
 use crate::error::RecorderError;
 use crate::processing::{media, process_samples};
-use crate::types::{SendableSample, SendableWriter};
+use crate::types::{SendableSample, SendableWriter, ReplayBuffer};
 
 pub struct RecorderInner {
     recording: Arc<AtomicBool>,
@@ -23,6 +24,8 @@ pub struct RecorderInner {
     process_handle: RefCell<Option<JoinHandle<Result<()>>>>,
     collect_audio_handle: RefCell<Option<JoinHandle<Result<()>>>>,
     collect_microphone_handle: RefCell<Option<JoinHandle<Result<()>>>>,
+    replay_buffer: RefCell<Option<Arc<ReplayBuffer>>>,
+    config: RecorderConfig,
 }
 
 impl RecorderInner {
@@ -56,6 +59,28 @@ impl RecorderInner {
             None
         };
 
+        
+        // Create replay buffer if enabled
+        let replay_buffer = if config.enable_replay_buffer() {
+            let buffer_duration = std::time::Duration::from_secs(config.replay_buffer_seconds() as u64);
+            let fps = fps_num as f64 / fps_den as f64;
+            
+            // Estimate the number of frames and audio samples in the buffer
+            let video_frames = (fps * buffer_duration.as_secs_f64()) as usize;
+            let audio_samples = if capture_audio || capture_microphone {
+                // Audio at 44.1kHz, assume ~10 packets per second for buffer capacity
+                (10.0 * buffer_duration.as_secs_f64()) as usize
+            } else {
+                0
+            };
+            
+            info!("Creating replay buffer for {} seconds ({} video frames, {} audio samples)",
+                 config.replay_buffer_seconds(), video_frames, audio_samples);
+            
+            Some(Arc::new(ReplayBuffer::new(buffer_duration, video_frames, audio_samples)))
+        } else {
+            None
+        };
 
         // Parse out path string from PathBuf
         let output_path = config.output_path()
@@ -166,6 +191,7 @@ impl RecorderInner {
 
             // Start processing thread
             let rec_clone = recording.clone();
+            let buffer_clone = replay_buffer.clone();
             process_handle = Some(std::thread::spawn(move || {
                 process_samples(
                     sendable_sink,
@@ -182,6 +208,7 @@ impl RecorderInner {
                     capture_microphone,
                     system_volume,
                     microphone_volume,
+                    buffer_clone,
                 )
             }));
         }
@@ -193,6 +220,8 @@ impl RecorderInner {
             process_handle: RefCell::new(process_handle),
             collect_audio_handle: RefCell::new(collect_audio_handle),
             collect_microphone_handle: RefCell::new(collect_microphone_handle),
+            replay_buffer: RefCell::new(replay_buffer),
+            config: config.clone(),
         })
     }
 
@@ -226,6 +255,108 @@ impl RecorderInner {
             }
         }
 
+        Ok(())
+    }
+    
+    /// Save the content of the replay buffer to a file
+    pub fn save_replay(&self, output_path: &str) -> std::result::Result<(), RecorderError> {
+        info!("Saving replay buffer to {}", output_path);
+        
+        let replay_buffer = self.replay_buffer.borrow();
+        let buffer = replay_buffer.as_ref().ok_or_else(|| {
+            RecorderError::Generic("Replay buffer is not enabled".to_string())
+        })?;
+        
+        // Get the current time range from the buffer
+        let duration = buffer.current_duration();
+        if duration.as_secs() == 0 {
+            return Err(RecorderError::Generic("Replay buffer is empty".to_string()));
+        }
+        
+        info!("Replay buffer contains {} seconds of data", duration.as_secs_f64());
+        
+        unsafe {
+            // Get the oldest timestamp in the buffer
+            let oldest_timestamp = *buffer.oldest_timestamp.lock().unwrap();
+            
+            // Get all video and audio samples from the buffer (within the time range)
+            let now = std::time::Instant::now();
+            let video_samples = buffer.get_video_samples(oldest_timestamp, i64::MAX);
+            let audio_samples = buffer.get_audio_samples(oldest_timestamp, i64::MAX);
+            info!("Retrieved {} video frames and {} audio samples in {:?}",
+                video_samples.len(), audio_samples.len(), now.elapsed());
+            
+            if video_samples.is_empty() {
+                return Err(RecorderError::Generic("No video frames in replay buffer".to_string()));
+            }
+    
+            let video_encoder = get_video_encoder_by_type(self.config.video_encoder())?;
+                
+            let media_sink = media::create_sink_writer(
+                output_path,
+                self.config.fps_num(),
+                self.config.fps_den(),
+                self.config.output_width(),
+                self.config.output_height(),
+                self.config.capture_audio(),
+                self.config.capture_microphone(),
+                self.config.video_bitrate(),
+                &video_encoder.id,
+            )?;
+            info!("Created sink writer");
+            
+            // Begin writing
+            media_sink.BeginWriting()?;
+            info!("Began writing");
+            
+            // Define stream indices
+            let video_stream_index = 0;
+            let audio_stream_index = if !audio_samples.is_empty() { 1 } else { 0 };
+            
+            // Find the earliest timestamp to use as a reference for normalization
+            let earliest_timestamp = if !video_samples.is_empty() {
+                video_samples[0].1
+            } else if !audio_samples.is_empty() {
+                audio_samples[0].1
+            } else {
+                oldest_timestamp
+            };
+            
+            info!("Normalizing timestamps, earliest: {}", earliest_timestamp);
+            
+            // Write video samples with normalized timestamps
+            info!("Writing {} video frames to replay file", video_samples.len());
+            for (sample, timestamp) in video_samples {
+                // Calculate normalized timestamp (relative to the earliest timestamp)
+                let normalized_timestamp = timestamp - earliest_timestamp;
+                
+                // Set the normalized timestamp directly on the sample
+                sample.0.SetSampleTime(normalized_timestamp)?;
+                
+                // Write the sample with the normalized timestamp
+                media_sink.WriteSample(video_stream_index, &*sample.0)?;
+            }
+            
+            // Write audio samples with normalized timestamps
+            if !audio_samples.is_empty() {
+                info!("Writing {} audio samples to replay file", audio_samples.len());
+                for (sample, timestamp) in audio_samples {
+                    // Calculate normalized timestamp (relative to the earliest timestamp)
+                    let normalized_timestamp = timestamp - earliest_timestamp;
+                    
+                    // Set the normalized timestamp directly on the sample
+                    sample.0.SetSampleTime(normalized_timestamp)?;
+                    
+                    // Write the sample with the normalized timestamp
+                    media_sink.WriteSample(audio_stream_index, &*sample.0)?;
+                }
+            }
+            
+            // Finalize the media sink
+            media_sink.Finalize()?;
+            info!("Replay buffer saved to {} in {:?}", output_path, now.elapsed());
+        }
+        
         Ok(())
     }
 }

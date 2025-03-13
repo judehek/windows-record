@@ -76,4 +76,19 @@ impl Recorder {
     pub fn config(&self) -> &RecorderConfig {
         &self.config
     }
+    
+    /// Save the content of the replay buffer to a file
+    pub fn save_replay(&self, output_path: &str) -> Result<()> {
+        if !self.config.enable_replay_buffer() {
+            return Err(RecorderError::Generic("Replay buffer is not enabled".to_string()));
+        }
+        
+        let rec_inner = self.rec_inner.borrow();
+        
+        let Some(ref inner) = *rec_inner else {
+            return Err(RecorderError::NoRecorderBound);
+        };
+        
+        inner.save_replay(output_path)
+    }
 }
