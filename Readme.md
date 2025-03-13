@@ -1,7 +1,5 @@
 # Windows Record
 
-## Overview
-
 Windows Record is an efficient Rust library designed for seamless window recording. Using the Windows Desktop Duplication API, it captures window content directly without the yellow recording border caused by the WGC API. The library prioritizes performance and ease-of-use.
 
 ## Key Features
@@ -82,44 +80,43 @@ fn main() -> Result<()> {
 See the `examples/replay_buffer.rs` file for a complete example of how to use the replay buffer functionality.
 
 ## Configuration
-use windows_record::{Recorder, AudioSource, VideoEncoderType, Result};
 
-fn main() -> Result<()> {
-    let config = Recorder::builder()
-        // Video settings
-        .fps(60, 1)
-        .input_dimensions(1920, 1080)
-        .output_dimensions(1920, 1080)
-        .video_bitrate(8000000)
-        .video_encoder(VideoEncoderType::Nvenc)
-        
-        // Audio settings
-        .capture_audio(true)
-        .capture_microphone(true)
-        .audio_source(AudioSource::Desktop)
-        .system_volume(Some(0.8))
-        .microphone_volume(Some(0.7))
-        .microphone_device(Some("Microphone (HD Audio Device)"))
-        
-        // Output settings
-        .output_path("recordings/gameplay.mp4")
-        .debug_mode(false)
-        
-        // Replay buffer
-        .enable_replay_buffer(true)
-        .replay_buffer_seconds(60)
-        
-        .build();
-        
-    // Initialize recorder
-    let recorder = Recorder::new(config)?
-        .with_process_name("Game Window");
-        
-    // Start recording
-    recorder.start_recording()?;
-    
-    Ok(())
-}
+The recorder offers extensive configuration options through its builder pattern:
+
+### Minimal Configuration
+
+You can create a minimal configuration like this:
+
+```rust
+let config = Recorder::builder()
+    .output_path("output.mp4")
+    .build();
+```
+
+This will use all default settings and just specify the output file.
+
+### Video Settings
+- `fps(num, den)` - Set frame rate (default: 30/1)
+- `input_dimensions(width, height)` - Set input resolution (default: 1920x1080)
+- `output_dimensions(width, height)` - Set output resolution (default: 1920x1080)
+- `video_bitrate(bitrate)` - Set video bitrate in bits per second (default: 5,000,000)
+- `video_encoder(encoder)` - Set video encoder (default: H264, options: H264, HEVC)
+
+### Audio Settings
+- `capture_audio(enabled)` - Enable/disable system audio capture (default: true)
+- `capture_microphone(enabled)` - Enable/disable microphone capture (default: false)
+- `microphone_volume(volume)` - Set microphone volume (0.0-1.0, default: None)
+- `system_volume(volume)` - Set system audio volume (0.0-1.0, default: None)
+- `audio_source(source)` - Set audio source (default: ActiveWindow, options: Desktop, ActiveWindow)
+- `microphone_device(device_name)` - Set specific microphone device (default: None)
+
+### Output Settings
+- `output_path(path)` - Set recording output path (default: current directory)
+- `debug_mode(enabled)` - Enable debug logging and diagnostics (default: false)
+
+### Replay Buffer Settings
+- `enable_replay_buffer(enabled)` - Enable replay buffer feature (default: false)
+- `replay_buffer_seconds(seconds)` - Set replay buffer duration in seconds (default: 30)
 
 ## Limitations
 
