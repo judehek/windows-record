@@ -56,8 +56,22 @@ pub unsafe fn setup_video_converter(
     // Initialize the converter - only flush once at the beginning instead of each frame
     converter.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
     
-    // Optional: Check if async processing is supported 
-    // (uncomment if you want to enable async processing)
+    // Try enabling async mode
+    match converter.GetAttributes() {
+        Ok(attrs) => {
+            // Try to set async mode - this may fail if not supported
+            let result = attrs.SetUINT32(&MF_TRANSFORM_ASYNC, 1);
+            if result.is_ok() {
+                info!("Async processing enabled successfully");
+            } else {
+                info!("Transform doesn't support async processing");
+            }
+        },
+        Err(_) => {
+            // This transform doesn't support the attributes interface
+            warn!("Transform doesn't support attributes interface");
+        }
+    }
 
     Ok(converter)
 }
