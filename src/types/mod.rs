@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::collections::{VecDeque, HashMap};
 use log::{debug, trace, info, error};
-use windows::core::{ComInterface, Interface, Result, HRESULT};
+use windows::core::{ComInterface, Result};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
@@ -64,9 +64,7 @@ impl Drop for SendableSample {
                 let texture_ptr_copy = texture_ptr;
                 let pool_clone = pool.clone();
                 
-                // Have to clone the IMFSample from the Arc since we can't move out of self.sample
-                // during drop (we don't own self)
-                let sample_clone = unsafe { self.sample.as_ref().clone() };
+                let sample_clone = self.sample.as_ref().clone();
                 
                 // Use a thread-local to track whether we're already inside a drop to prevent cycles
                 thread_local! {

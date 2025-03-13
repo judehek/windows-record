@@ -1,9 +1,6 @@
 use std::ptr;
 
-use windows::core::{ComInterface, Result, GUID};
-use windows::Win32::Foundation::TRUE;
-use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
-use windows::Win32::Graphics::Dxgi::IDXGISurface;
+use windows::core::{Result, GUID};
 use windows::Win32::Media::Audio::{WAVEFORMATEX, WAVE_FORMAT_PCM};
 use windows::Win32::Media::MediaFoundation::*;
 

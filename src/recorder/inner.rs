@@ -29,7 +29,7 @@ pub struct RecorderInner {
 
 impl RecorderInner {
     pub fn init(config: &RecorderConfig, process_name: &str) -> Result<Self> {
-        // By default, use substring matching (for backward compatibility)
+        // By default, use substring matching
         Self::init_with_exact_match(config, process_name, false)
     }
     

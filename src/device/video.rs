@@ -31,8 +31,7 @@ pub fn enumerate_video_encoders() -> Result<Vec<VideoEncoder>> {
         MFVideoFormat_H264, MFVideoFormat_HEVC,
     };
 
-    // These are the video encoders we currently support
-    // In a real implementation, this might query the system for available encoders
+    // Currently supported video encoders
     let encoders = vec![
         VideoEncoder {
             id: MFVideoFormat_H264,

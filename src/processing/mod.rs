@@ -147,7 +147,7 @@ pub fn process_samples(
                     if audio_mixer.is_none() {
                         if let Some(buffer) = &replay_buffer {
                             // Clone the IMFSample from the Arc
-                            let cloned_sample = unsafe { audio_samp.sample.as_ref().clone() };
+                            let cloned_sample = audio_samp.sample.as_ref().clone();
                             buffer.add_audio_sample(SendableSample::new(cloned_sample), timestamp)?;
                         }
                     }
@@ -187,7 +187,7 @@ pub fn process_samples(
                     if audio_mixer.is_none() {
                         if let Some(buffer) = &replay_buffer {
                             // Clone the IMFSample from the Arc
-                            let cloned_sample = unsafe { mic_samp.sample.as_ref().clone() };
+                            let cloned_sample = mic_samp.sample.as_ref().clone();
                             buffer.add_audio_sample(SendableSample::new(cloned_sample), timestamp)?;
                         }
                     }
@@ -221,7 +221,6 @@ pub fn process_samples(
                             let write_start = std::time::Instant::now();
                             
                             // Add mixed sample to replay buffer with current timestamp
-                            // You might need to use a timestamp from one of the original sources or create one
                             if let Some(buffer) = &replay_buffer {
                                 // Get timestamp from the sample if possible or use system time
                                 let timestamp = unsafe { 
@@ -234,7 +233,7 @@ pub fn process_samples(
                                     })
                                 };
                                 // Extract the IMFSample from the Arc
-                                let cloned_sample = unsafe { mixed_sample.as_ref().clone() };
+                                let cloned_sample = mixed_sample.as_ref().clone();
                                 buffer.add_audio_sample(SendableSample::new(cloned_sample), timestamp)?;
                             }
                             

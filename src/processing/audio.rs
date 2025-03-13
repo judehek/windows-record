@@ -68,7 +68,7 @@ impl AudioMixer {
                 return None;
             }
             
-            // We have samples from both sources - let's mix them
+            // Mix them because we have samples from both sources
             debug!("Mixing system and microphone audio");
             let sys_sample = self.system_audio_queue.pop_front().unwrap();
             let mic_sample = self.microphone_queue.pop_front().unwrap();
@@ -141,9 +141,8 @@ impl AudioMixer {
                 }
             }
             
-            // This path should not be reachable due to the checks above,
-            // but just in case, return None
-            debug!("Unexpected state in process_next_sample");
+            // Shouldn't happen
+            error!("Unexpected state in process_next_sample");
             None
         }
     }

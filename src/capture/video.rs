@@ -13,7 +13,7 @@ use windows::Win32::System::Threading::*;
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 use super::dxgi::{create_blank_dxgi_texture, setup_dxgi_duplication};
-use super::window::{get_window_by_string, is_window_valid, get_window_title};
+use super::window::{is_window_valid, get_window_title};
 use crate::capture::dxgi::create_staging_texture;
 use crate::types::{SendableSample, TexturePool, SamplePool};
 
@@ -377,12 +377,10 @@ unsafe fn send_frame(
     // Create a pooled SendableSample that will return the sample to the pool when dropped
     let sendable = SendableSample::new_pooled(samp, texture, sample_pool.clone());
     
-    // Send the sample - if send fails, the sample will be automatically returned to the pool
-    // when sendable is dropped at the end of this function
+    // Send the sample and return to pool if fails
     match send.send(sendable) {
         Ok(_) => Ok(()),
         Err(e) => {
-            // The sample will be returned to the pool automatically when sendable is dropped
             trace!("Failed to send frame (channel closed), sample will be returned to pool");
             Err(Error::from_win32())
         }

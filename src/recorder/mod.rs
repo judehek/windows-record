@@ -77,9 +77,18 @@ impl Recorder {
             }
         }
     
-        // Use the new init_with_exact_match function to pass the flag directly
+        // We need to modify the inner::RecorderInner::init to take use_exact_match directly
+        // For now we'll set it in TLS but we should update the function signature
+        thread_local! {
+            static USE_EXACT_MATCH: std::cell::RefCell<bool> = std::cell::RefCell::new(false);
+        }
+        
+        USE_EXACT_MATCH.with(|cell| {
+            *cell.borrow_mut() = use_exact_match;
+        });
+    
         *rec_inner = Some(
-            RecorderInner::init_with_exact_match(&self.config, proc_name, use_exact_match)
+            RecorderInner::init(&self.config, proc_name)
                 .map_err(|e| RecorderError::FailedToStart(e.to_string()))?,
         );
     

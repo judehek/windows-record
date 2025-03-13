@@ -91,9 +91,6 @@ pub unsafe fn convert_bgra_to_nv12(
 
     // Process the frame - removed unnecessary flush between frames
     converter.ProcessInput(0, sample, 0)?;
-    
-    // No drain command here - only drain when necessary (end of sequence or format change)
-    // converter.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
 
     let mut output = MFT_OUTPUT_DATA_BUFFER {
         pSample: ManuallyDrop::new(Some(output_sample)),
@@ -186,7 +183,7 @@ unsafe fn create_nv12_output(
     Ok((nv12_texture, output_sample))
 }
 
-// Optional helper function to flush the converter when changing formats or at stream boundaries
+// Helper function to flush the converter when changing formats or at stream boundaries
 pub unsafe fn flush_converter(converter: &IMFTransform) -> Result<()> {
     converter.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
     converter.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
