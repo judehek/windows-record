@@ -1,10 +1,10 @@
 use log::{error, info};
 use windows::Win32::System::Performance::QueryPerformanceCounter;
-use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::sync::Barrier;
+use std::sync::RwLock; // Replace RefCell with RwLock
 use std::thread::JoinHandle;
 use windows::core::{ComInterface, Result};
 use windows::Win32::Graphics::Direct3D::*;
@@ -19,11 +19,11 @@ use crate::types::{SendableSample, SendableWriter, ReplayBuffer};
 
 pub struct RecorderInner {
     recording: Arc<AtomicBool>,
-    collect_video_handle: RefCell<Option<JoinHandle<Result<()>>>>,
-    process_handle: RefCell<Option<JoinHandle<Result<()>>>>,
-    collect_audio_handle: RefCell<Option<JoinHandle<Result<()>>>>,
-    collect_microphone_handle: RefCell<Option<JoinHandle<Result<()>>>>,
-    replay_buffer: RefCell<Option<Arc<ReplayBuffer>>>,
+    collect_video_handle: RwLock<Option<JoinHandle<Result<()>>>>,
+    process_handle: RwLock<Option<JoinHandle<Result<()>>>>,
+    collect_audio_handle: RwLock<Option<JoinHandle<Result<()>>>>,
+    collect_microphone_handle: RwLock<Option<JoinHandle<Result<()>>>>,
+    replay_buffer: RwLock<Option<Arc<ReplayBuffer>>>,
     config: RecorderConfig,
 }
 
@@ -225,11 +225,11 @@ impl RecorderInner {
         info!("Recorder initialized successfully");
         Ok(Self {
             recording,
-            collect_video_handle: RefCell::new(collect_video_handle),
-            process_handle: RefCell::new(process_handle),
-            collect_audio_handle: RefCell::new(collect_audio_handle),
-            collect_microphone_handle: RefCell::new(collect_microphone_handle),
-            replay_buffer: RefCell::new(replay_buffer),
+            collect_video_handle: RwLock::new(collect_video_handle),
+            process_handle: RwLock::new(process_handle),
+            collect_audio_handle: RwLock::new(collect_audio_handle),
+            collect_microphone_handle: RwLock::new(collect_microphone_handle),
+            replay_buffer: RwLock::new(replay_buffer),
             config: config.clone(),
         })
     }
@@ -243,24 +243,39 @@ impl RecorderInner {
         self.recording.store(false, Ordering::Relaxed);
 
         // Join all threads and handle any errors
-        let handles = [
-            ("Frame", self.collect_video_handle.borrow_mut().take()),
-            ("Audio", self.collect_audio_handle.borrow_mut().take()),
-            (
-                "Microphone",
-                self.collect_microphone_handle.borrow_mut().take(),
-            ),
-            ("Process", self.process_handle.borrow_mut().take()),
-        ];
+        // Updated to use RwLock instead of RefCell
+        let mut handles = Vec::new();
+        
+        if let Ok(mut lock) = self.collect_video_handle.write() {
+            if let Some(handle) = lock.take() {
+                handles.push(("Frame", handle));
+            }
+        }
+        
+        if let Ok(mut lock) = self.collect_audio_handle.write() {
+            if let Some(handle) = lock.take() {
+                handles.push(("Audio", handle));
+            }
+        }
+        
+        if let Ok(mut lock) = self.collect_microphone_handle.write() {
+            if let Some(handle) = lock.take() {
+                handles.push(("Microphone", handle));
+            }
+        }
+        
+        if let Ok(mut lock) = self.process_handle.write() {
+            if let Some(handle) = lock.take() {
+                handles.push(("Process", handle));
+            }
+        }
 
         for (name, handle) in handles.into_iter() {
-            if let Some(handle) = handle {
-                if let Err(e) = handle
-                    .join()
-                    .map_err(|_| RecorderError::Generic(format!("{} Handle join failed", name)))?
-                {
-                    error!("{} thread error: {:?}", name, e);
-                }
+            if let Err(e) = handle
+                .join()
+                .map_err(|_| RecorderError::Generic(format!("{} Handle join failed", name)))?
+            {
+                error!("{} thread error: {:?}", name, e);
             }
         }
 
@@ -271,7 +286,10 @@ impl RecorderInner {
     pub fn save_replay(&self, output_path: &str) -> std::result::Result<(), RecorderError> {
         info!("Saving replay buffer to {}", output_path);
         
-        let replay_buffer = self.replay_buffer.borrow();
+        // Updated to use RwLock instead of RefCell
+        let replay_buffer = self.replay_buffer.read()
+            .map_err(|_| RecorderError::Generic("Failed to acquire replay buffer lock".to_string()))?;
+            
         let buffer = replay_buffer.as_ref().ok_or_else(|| {
             RecorderError::Generic("Replay buffer is not enabled".to_string())
         })?;
@@ -395,6 +413,7 @@ impl Drop for RecorderInner {
 }
 
 unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
+    // This function remains unchanged
     let feature_levels = [
         D3D_FEATURE_LEVEL_11_1,
         D3D_FEATURE_LEVEL_11_0,
