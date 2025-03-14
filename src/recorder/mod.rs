@@ -7,25 +7,25 @@ pub use self::config::{RecorderConfig, RecorderConfigBuilder, AudioSource};
 use self::inner::RecorderInner;
 use crate::error::{RecorderError, Result};
 use log::{info, debug};
-use std::cell::RefCell;
+use std::sync::RwLock;
 use windows::Win32::Foundation::{BOOL, LPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextW, IsWindowVisible};
 
 pub struct Recorder {
-    rec_inner: RefCell<Option<RecorderInner>>,
+    rec_inner: RwLock<Option<RecorderInner>>,
     config: RecorderConfig,
-    process_name: RefCell<Option<String>>,
-    use_exact_match: RefCell<bool>,
+    process_name: RwLock<Option<String>>,
+    use_exact_match: RwLock<bool>,
 }
 
 impl Recorder {
     // Create a new recorder instance with configuration
     pub fn new(config: RecorderConfig) -> Result<Self> {
         Ok(Self {
-            rec_inner: RefCell::new(None),
+            rec_inner: RwLock::new(None),
             config,
-            process_name: RefCell::new(None),
-            use_exact_match: RefCell::new(false),
+            process_name: RwLock::new(None),
+            use_exact_match: RwLock::new(false),
         })
     }
 
@@ -36,7 +36,9 @@ impl Recorder {
 
     // Set the process name to record
     pub fn with_process_name(self, proc_name: &str) -> Self {
-        *self.process_name.borrow_mut() = Some(proc_name.to_string());
+        if let Ok(mut process_name) = self.process_name.write() {
+            *process_name = Some(proc_name.to_string());
+        }
         self
     }
     
@@ -44,7 +46,9 @@ impl Recorder {
     /// When true, the window title must match exactly
     /// When false (default), any window containing the substring will match
     pub fn with_exact_match(self, use_exact: bool) -> Self {
-        *self.use_exact_match.borrow_mut() = use_exact;
+        if let Ok(mut exact_match) = self.use_exact_match.write() {
+            *exact_match = use_exact;
+        }
         self
     }
 
@@ -54,11 +58,18 @@ impl Recorder {
             info!("Starting recording to file: {}", self.config.output_path().display());
         }
     
-        let process_name = self.process_name.borrow();
-        let use_exact_match = *self.use_exact_match.borrow();
-        let mut rec_inner = self.rec_inner.borrow_mut();
+        // Read the process_name and use_exact_match with read locks
+        let process_name_guard = self.process_name.read().map_err(|_| 
+            RecorderError::Generic("Failed to acquire read lock on process_name".to_string()))?;
+        
+        let use_exact_match = *self.use_exact_match.read().map_err(|_| 
+            RecorderError::Generic("Failed to acquire read lock on use_exact_match".to_string()))?;
+        
+        // Get a write lock for rec_inner
+        let mut rec_inner = self.rec_inner.write().map_err(|_| 
+            RecorderError::Generic("Failed to acquire write lock on rec_inner".to_string()))?;
     
-        let Some(ref proc_name) = *process_name else {
+        let Some(ref proc_name) = *process_name_guard else {
             return Err(RecorderError::NoProcessSpecified);
         };
         
@@ -88,7 +99,7 @@ impl Recorder {
         });
     
         *rec_inner = Some(
-            RecorderInner::init(&self.config, proc_name)
+            RecorderInner::init_with_exact_match(&self.config, proc_name, use_exact_match)
                 .map_err(|e| RecorderError::FailedToStart(e.to_string()))?,
         );
     
@@ -101,7 +112,8 @@ impl Recorder {
             info!("Stopping recording");
         }
 
-        let rec_inner = self.rec_inner.borrow();
+        let rec_inner = self.rec_inner.read().map_err(|_| 
+            RecorderError::Generic("Failed to acquire read lock on rec_inner".to_string()))?;
 
         let Some(ref inner) = *rec_inner else {
             return Err(RecorderError::NoRecorderBound);
@@ -121,7 +133,8 @@ impl Recorder {
             return Err(RecorderError::Generic("Replay buffer is not enabled".to_string()));
         }
         
-        let rec_inner = self.rec_inner.borrow();
+        let rec_inner = self.rec_inner.read().map_err(|_| 
+            RecorderError::Generic("Failed to acquire read lock on rec_inner".to_string()))?;
         
         let Some(ref inner) = *rec_inner else {
             return Err(RecorderError::NoRecorderBound);
