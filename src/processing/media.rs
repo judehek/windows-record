@@ -170,7 +170,10 @@ unsafe fn configure_video_stream(
     info!("configure_video_stream - Video stream added successfully");
     
     info!("configure_video_stream - Setting input media type for stream 0");
-    sink_writer.SetInputMediaType(0, &video_input_type, config_attrs.as_ref())?;
+    match sink_writer.SetInputMediaType(0, &video_input_type, config_attrs.as_ref()) {
+        Ok(_) => info!("Input media type set successfully"),
+        Err(e) => error!("Failed to set input media type: {:?}", e),
+    }
     info!("configure_video_stream - Input media type set successfully");
 
     info!("configure_video_stream - Completed successfully");
