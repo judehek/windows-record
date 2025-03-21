@@ -1,4 +1,4 @@
-use log::{debug, info};
+use log::{debug, info, trace};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -433,7 +433,7 @@ unsafe fn create_audio_sample(
 
             // Debug first few frames
             if num_frames > 0 {
-                debug!(
+                trace!(
                     "First few audio frames (L/R pairs): {:?}",
                     &src[..std::cmp::min(8 * num_channels, src.len())]
                 );

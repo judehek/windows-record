@@ -3,7 +3,7 @@ pub mod media;
 pub mod video;
 
 use audio::AudioMixer;
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
@@ -239,7 +239,7 @@ pub fn process_samples(
                             
                             // Write the mixed sample
                             unsafe { writer.0.WriteSample(stream_index, &*mixed_sample)? };
-                            debug!("Mixed audio sample written in {:?}", write_start.elapsed());
+                            trace!("Mixed audio sample written in {:?}", write_start.elapsed());
                         }
                         Err(e) => {
                             error!("Error mixing audio samples: {:?}", e);

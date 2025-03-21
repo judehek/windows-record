@@ -1,4 +1,4 @@
-use log::{debug, info};
+use log::{debug, info, trace};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -453,7 +453,7 @@ unsafe fn create_microphone_sample(
 
             // Debug first few frames
             if num_frames > 0 {
-                debug!(
+                trace!(
                     "First few frames (L/R pairs): {:?}",
                     &src[..std::cmp::min(8 * num_channels, src.len())]
                 );

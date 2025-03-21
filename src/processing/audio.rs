@@ -57,26 +57,26 @@ impl AudioMixer {
     }
 
     pub unsafe fn process_next_sample(&mut self) -> Option<Result<Arc<IMFSample>>> {
-        debug!("Processing next sample - sys queue: {}, mic queue: {}", 
+        trace!("Processing next sample - sys queue: {}, mic queue: {}", 
                self.system_audio_queue.len(), self.microphone_queue.len());
     
         // If both sources are active, we need samples from both to mix
         if self.both_sources_active {
             // If either queue is empty, return None to wait for the other source
             if self.system_audio_queue.is_empty() || self.microphone_queue.is_empty() {
-                debug!("Both sources active but waiting for samples from both queues to prevent desync");
+                trace!("Both sources active but waiting for samples from both queues to prevent desync");
                 return None;
             }
             
             // Mix them because we have samples from both sources
-            debug!("Mixing system and microphone audio");
+            trace!("Mixing system and microphone audio");
             let sys_sample = self.system_audio_queue.pop_front().unwrap();
             let mic_sample = self.microphone_queue.pop_front().unwrap();
             
             // Mix the samples
             match self.mix_samples(&sys_sample.sample, &mic_sample.sample) {
                 Ok(mixed) => {
-                    debug!("Successfully mixed audio samples");
+                    trace!("Successfully mixed audio samples");
                     Some(Ok(Arc::new(mixed)))
                 },
                 Err(e) => {
@@ -211,12 +211,12 @@ impl AudioMixer {
         output_sample.SetSampleTime(sample_time)?;
         output_sample.SetSampleDuration(sample_duration)?;
         
-        debug!("Volume application completed successfully");
+        trace!("Volume application completed successfully");
         Ok(output_sample)
     }
 
     unsafe fn mix_samples(&self, sys_sample: &IMFSample, mic_sample: &IMFSample) -> Result<IMFSample> {
-        debug!("Creating mixed buffer");
+        trace!("Creating mixed buffer");
         
         // Get sample time and duration from system audio
         let sample_time = sys_sample.GetSampleTime()?;
@@ -243,7 +243,7 @@ impl AudioMixer {
                 return Err(e);
             }
             
-            debug!("Buffer sizes - System: {} bytes, Microphone: {} bytes", sys_length, mic_length);
+            trace!("Buffer sizes - System: {} bytes, Microphone: {} bytes", sys_length, mic_length);
             
             // Create a new sample and buffer for the mixed audio
             let output_sample = match MFCreateSample() {
@@ -344,7 +344,7 @@ impl AudioMixer {
         sys_length: u32,
         mic_length: u32
     ) -> Result<()> {
-        debug!("Mixing with system volume:{:.2} mic volume:{:.2}", 
+        trace!("Mixing with system volume:{:.2} mic volume:{:.2}", 
                self.system_volume, self.microphone_volume);
         
         // Access the audio data as 16-bit PCM
@@ -395,7 +395,7 @@ impl AudioMixer {
             }
         }
         
-        debug!("PCM mixing completed successfully");
+        trace!("PCM mixing completed successfully");
         Ok(())
     }
 }
