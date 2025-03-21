@@ -125,7 +125,7 @@ impl RecorderInner {
             // Get the video encoder
             info!("Getting video encoder: {:?}", config.video_encoder());
             let video_encoder = get_video_encoder_by_type(config.video_encoder())?;
-            info!("Video encoder obtained: {}", video_encoder.id);
+            info!("Video encoder obtained: {:?}", video_encoder.id);
             
             // Create and configure media sink
             info!("Creating media sink writer for path: {}", output_path);
