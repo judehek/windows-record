@@ -451,7 +451,7 @@ impl RecorderInner {
     
             info!("Getting video encoder for replay file");
             let video_encoder = get_video_encoder_by_type(self.config.video_encoder())?;
-            info!("Video encoder obtained: {}", video_encoder.id);
+            info!("Video encoder obtained: {:?}", video_encoder.id);
                 
             info!("Creating sink writer for replay file");
             let media_sink = media::create_sink_writer(
@@ -503,7 +503,8 @@ impl RecorderInner {
                 sample.SetSampleTime(normalized_timestamp)?;
                 
                 // Write the sample with the normalized timestamp
-                media_sink.WriteSample(video_stream_index, &**sample)?;
+                info!("Writing audio sample with timestamp: {}", normalized_timestamp);
+                    media_sink.WriteSample(audio_stream_index, &***sample)?;
             }
             info!("Finished writing all video frames");
             
@@ -522,7 +523,7 @@ impl RecorderInner {
                     sample.SetSampleTime(normalized_timestamp)?;
                     
                     // Write the sample with the normalized timestamp
-                    media_sink.WriteSample(audio_stream_index, &**sample)?;
+                    media_sink.WriteSample(audio_stream_index, &***sample)?;
                 }
                 info!("Finished writing all audio samples");
             }
