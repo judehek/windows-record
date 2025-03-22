@@ -1,4 +1,4 @@
-use log::{debug, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{SendError, Sender};
 use std::sync::Arc;
@@ -306,58 +306,118 @@ unsafe fn process_frame(
         unsafe { LAST_FOCUS_STATE = Some(is_window_focused); }
     }
     
-    duplication.AcquireNextFrame(16, &mut info, &mut resource)?;
+    info!("Attempting to acquire next frame");
+    let acquire_result = duplication.AcquireNextFrame(16, &mut info, &mut resource);
+    if let Err(ref e) = acquire_result {
+        error!("AcquireNextFrame failed with error: {:?}", e);
+        return Err(FrameError::WindowsError(e.clone()));
+    }
+    info!("Successfully acquired frame");
     
-    let context = context_mutex.lock().unwrap();
+    info!("Attempting to lock context mutex");
+    let context_lock_result = context_mutex.lock();
+    if let Err(ref e) = context_lock_result {
+        error!("Failed to lock context mutex: {:?}", e);
+        // We should return an error here, but you'll need to add a new FrameError variant
+        // For now, let's just panic with the error message
+        panic!("Failed to lock context mutex: {:?}", e);
+    }
+    let context = context_lock_result.unwrap();
+    info!("Successfully locked context mutex");
     
     if let Some(resource) = resource {
-        // Acquire a texture from the pool rather than creating a new one every time
-        let pooled_texture = texture_pool.acquire().map_err(|e| {
-            log::error!("Failed to acquire texture from pool: {:?}", e);
-            // Convert to WindowsError first if needed, or just use TexturePoolError variant
+        info!("Processing acquired resource");
+        
+        // Acquire a texture from the pool
+        info!("Attempting to acquire texture from pool");
+        let pooled_texture_result = texture_pool.acquire();
+        if let Err(ref e) = pooled_texture_result {
+            error!("Failed to acquire texture from pool: {:?}", e);
+            // Release the frame before returning error
+            let release_result = duplication.ReleaseFrame();
+            if let Err(ref e) = release_result {
+                error!("Additionally failed to release frame: {:?}", e);
+            }
+            return Err(FrameError::TexturePoolError);
+        }
+        let pooled_texture = pooled_texture_result.map_err(|e| {
+            error!("Texture pool error: {:?}", e);
             FrameError::TexturePoolError
         })?;
+        info!("Successfully acquired texture from pool");
         
         // Get the source texture from the resource
-        let source_texture: ID3D11Texture2D = resource.cast()?;
+        info!("Casting resource to texture");
+        let source_texture_result = resource.cast::<ID3D11Texture2D>();
+        if let Err(ref e) = source_texture_result {
+            error!("Failed to cast resource to texture: {:?}", e);
+            return Err(FrameError::WindowsError(e.clone()));
+        }
+        let source_texture: ID3D11Texture2D = source_texture_result?;
+        info!("Successfully cast resource to texture");
         
         if should_show_content {
-            // Copy content from source to pooled texture
+            info!("Copying source texture to pooled texture (window in focus)");
             context.CopyResource(&pooled_texture, &source_texture);
             
-            // Then copy from pooled to staging texture
+            info!("Copying pooled texture to staging texture");
             context.CopyResource(staging_texture, &pooled_texture);
         } else {
-            // Window not in focus, just use blank screen
+            info!("Copying blank texture to staging texture (window not in focus)");
             context.CopyResource(staging_texture, blank_texture);
         }
         
         // Release the original texture and frame
+        info!("Dropping source texture");
         drop(source_texture);
-        duplication.ReleaseFrame()?;
+        
+        info!("Attempting to release frame");
+        let release_result = duplication.ReleaseFrame();
+        if let Err(ref e) = release_result {
+            error!("ReleaseFrame failed with error: {:?}", e);
+            return Err(FrameError::WindowsError(e.clone()));
+        }
+        info!("Successfully released frame");
         
         // Return the pooled texture to the pool when done
+        info!("Releasing pooled texture back to pool");
         texture_pool.release(pooled_texture);
+        info!("Successfully released pooled texture");
+    } else {
+        info!("No resource acquired, using blank screen");
+        context.CopyResource(staging_texture, blank_texture);
     }
     
+    info!("Dropping context lock");
     drop(context);
+    info!("Context lock dropped");
     
     // Handle frame timing and duplication
+    info!("Handling frame timing");
     while *accumulated_delay >= frame_duration {
-        debug!("Duping a frame to catch up");
-        send_frame(staging_texture, frame_count, send, sample_pool)
-            .map_err(|_| FrameError::ChannelClosed)?;
+        info!("Duping a frame to catch up");
+        let send_result = send_frame(staging_texture, frame_count, send, sample_pool);
+        if let Err(ref e) = send_result {
+            error!("Failed to send duplicate frame: {:?}", e);
+            return Err(FrameError::ChannelClosed);
+        }
         *next_frame_time += frame_duration;
         *accumulated_delay -= frame_duration;
         *num_duped += 1;
     }
     
-    send_frame(staging_texture, frame_count, send, sample_pool)
-        .map_err(|_| FrameError::ChannelClosed)?;
+    info!("Sending normal frame");
+    let send_result = send_frame(staging_texture, frame_count, send, sample_pool);
+    if let Err(ref e) = send_result {
+        error!("Failed to send normal frame: {:?}", e);
+        return Err(FrameError::ChannelClosed);
+    }
     *next_frame_time += frame_duration;
     
     let current_time = Instant::now();
+    info!("Handling final frame timing adjustments");
     handle_frame_timing(current_time, *next_frame_time, accumulated_delay);
+    info!("Frame processing complete");
     
     Ok(())
 }
@@ -368,20 +428,34 @@ unsafe fn send_frame(
     send: &Sender<SendableSample>,
     sample_pool: &Arc<SamplePool>,
 ) -> Result<()> {
-    // Get a sample from the pool instead of creating a new one each time
-    let samp = sample_pool.acquire_for_texture(texture)?;
+    info!("Acquiring sample from pool for frame {}", frame_count);
+    let sample_result = sample_pool.acquire_for_texture(texture);
+    if let Err(ref e) = sample_result {
+        error!("Failed to acquire sample from pool: {:?}", e);
+        return Err(Error::from_win32());
+    }
+    let samp = sample_result?;
+    info!("Successfully acquired sample");
     
-    // Set the sample time based on frame count
-    sample_pool.set_sample_time(&samp, frame_count)?;
+    info!("Setting sample time for frame {}", frame_count);
+    let set_time_result = sample_pool.set_sample_time(&samp, frame_count);
+    if let Err(ref e) = set_time_result {
+        error!("Failed to set sample time: {:?}", e);
+        return Err(Error::from_win32());
+    }
+    info!("Successfully set sample time");
     
-    // Create a pooled SendableSample that will return the sample to the pool when dropped
+    info!("Creating sendable sample");
     let sendable = SendableSample::new_pooled(samp, texture, sample_pool.clone());
     
-    // Send the sample and return to pool if fails
+    info!("Sending frame {} to channel", frame_count);
     match send.send(sendable) {
-        Ok(_) => Ok(()),
+        Ok(_) => {
+            info!("Successfully sent frame {}", frame_count);
+            Ok(())
+        },
         Err(e) => {
-            trace!("Failed to send frame (channel closed), sample will be returned to pool");
+            error!("Failed to send frame {} (channel closed): {:?}", frame_count, e);
             Err(Error::from_win32())
         }
     }

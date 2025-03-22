@@ -14,7 +14,7 @@ fn main() -> Result<()> {
         .input_dimensions(1920, 1080)  
         .output_dimensions(1920, 1080)
         .capture_audio(true)
-        .capture_microphone(true)
+        .capture_microphone(false)
         .audio_source(AudioSource::Desktop)
         .microphone_volume(1.0)
         .system_volume(1.0)
