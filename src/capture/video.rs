@@ -206,6 +206,19 @@ pub unsafe fn get_frames(
             }
         }
         
+        // Check if we need to recreate the duplication interface
+        if duplication_result.is_err() {
+            info!("Recreating DXGI duplication interface after previous failure");
+            duplication_result = setup_dxgi_duplication(&device);
+            if let Err(e) = &duplication_result {
+                warn!("Failed to recreate DXGI duplication interface: {:?}", e);
+                // Wait a bit before trying again to avoid spinning too fast
+                spin_sleep::sleep(Duration::from_millis(100));
+                continue;
+            }
+            info!("DXGI duplication interface recreated successfully");
+        }
+        
         let duplication = duplication_result.as_ref().unwrap();
         
         match process_frame(
@@ -241,7 +254,7 @@ pub unsafe fn get_frames(
                     // Handle "keyed mutex abandoned" and access lost errors
                     if e.code() == windows::Win32::Graphics::Dxgi::DXGI_ERROR_ACCESS_LOST {
                         warn!("DXGI access lost (possibly keyed mutex abandoned), recreating duplication interface");
-                        // Mark the duplication interface as invalid
+                        // Mark the duplication interface as invalid and recreate it on the next loop iteration
                         duplication_result = Err(e);
                         continue;
                     }
