@@ -19,6 +19,7 @@ fn main() -> Result<()> {
         .microphone_volume(1.0)
         .system_volume(1.0)
         .debug_mode(true)
+        .capture_cursor(true)
         .output_path("output.mp4")
         .build();
 

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::sync::Barrier;
-use std::sync::RwLock; // Replace RefCell with RwLock
+use std::sync::RwLock;
 use std::thread::JoinHandle;
 use windows::core::{ComInterface, Result};
 use windows::Win32::Graphics::Direct3D::*;
@@ -199,6 +199,8 @@ impl RecorderInner {
             let dev_clone = device.clone();
             let barrier_clone = barrier.clone();
             let process_name_clone = process_name.to_string();
+            // Copy the capture_cursor value before using it in the thread
+            let capture_cursor = config.capture_cursor();
             collect_video_handle = Some(std::thread::spawn(move || {
                 info!("Video capture thread started");
                 let result = get_frames(
@@ -214,6 +216,7 @@ impl RecorderInner {
                     dev_clone,
                     context_mutex,
                     use_exact_match,
+                    capture_cursor,
                 );
                 info!("Video capture thread completed with result: {:?}", result.is_ok());
                 result
@@ -329,7 +332,6 @@ impl RecorderInner {
         info!("Recording flag set to false");
 
         // Join all threads and handle any errors
-        // Updated to use RwLock instead of RefCell
         let mut handles = Vec::new();
         
         info!("Acquiring video thread handle");
@@ -402,7 +404,6 @@ impl RecorderInner {
     pub fn save_replay(&self, output_path: &str) -> std::result::Result<(), RecorderError> {
         info!("Saving replay buffer to {}", output_path);
         
-        // Updated to use RwLock instead of RefCell
         info!("Acquiring read lock for replay buffer");
         let replay_buffer = self.replay_buffer.read()
             .map_err(|_| RecorderError::Generic("Failed to acquire replay buffer lock".to_string()))?;
@@ -566,7 +567,6 @@ impl Drop for RecorderInner {
 
 unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     info!("Creating D3D11 device");
-    // This function remains unchanged
     let feature_levels = [
         D3D_FEATURE_LEVEL_11_1,
         D3D_FEATURE_LEVEL_11_0,
@@ -581,7 +581,7 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     let mut device = None;
     let mut context = None;
     
-    // Base flags always include BGRA support
+    // Base flags
     let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
     info!("Base D3D11 creation flags: {:?}", flags);
     

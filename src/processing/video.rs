@@ -152,11 +152,8 @@ unsafe fn create_nv12_output(
             Quality: 0,
         },
         Usage: D3D11_USAGE_DEFAULT,
-        // Added D3D11_BIND_RENDER_TARGET for potential direct rendering if needed
         BindFlags: D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
         CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(0),
-        // Optional: Add SHARED flag if you need interop capabilities
-        // MiscFlags: D3D11_RESOURCE_MISC_SHARED,
         MiscFlags: D3D11_RESOURCE_MISC_FLAG(0),
     };
 
@@ -167,10 +164,8 @@ unsafe fn create_nv12_output(
     // Create output sample
     let output_sample: IMFSample = MFCreateSample()?;
 
-    // Cast to IDXGISurface instead of ID3D11Resource
     let nv12_surface: IDXGISurface = nv12_texture.cast()?;
     
-    // Create a DXGI buffer from the surface
     let output_buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &nv12_surface, 0, FALSE)?;
 
     // Add the buffer to the sample

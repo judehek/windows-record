@@ -6,7 +6,7 @@ use std::sync::{Barrier, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::Error;
 use windows::core::{ComInterface, Error as WindowsError, Result};
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{BOOL, HWND};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::{IDXGIOutputDuplication, IDXGIResource};
 use windows::Win32::System::Threading::*;
@@ -140,6 +140,7 @@ pub unsafe fn get_frames(
     device: Arc<ID3D11Device>,
     context_mutex: Arc<Mutex<ID3D11DeviceContext>>,
     use_exact_match: bool,
+    capture_cursor: bool,
 ) -> Result<()> {
     info!("Starting frame collection for window: '{}'", get_window_title(hwnd));
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
@@ -162,6 +163,7 @@ pub unsafe fn get_frames(
     use windows::Win32::Graphics::Direct3D11::*;
 
     // Create a pool with capacity of 10 textures - adjust based on expected frame rate and processing time
+    // Create pool textures with RENDER_TARGET flag for cursor overlay
     let texture_pool = TexturePool::new(
         device.clone(),
         10, // Capacity
@@ -169,7 +171,7 @@ pub unsafe fn get_frames(
         input_height,
         DXGI_FORMAT_B8G8R8A8_UNORM,
         D3D11_USAGE_DEFAULT.0.try_into().unwrap(),
-        D3D11_BIND_SHADER_RESOURCE.0.try_into().unwrap(),
+        (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0.try_into().unwrap(),
         0, // CPU access flags
         0, // Misc flags
     )?;
@@ -236,6 +238,7 @@ pub unsafe fn get_frames(
             &mut num_duped,
             &texture_pool,
             &sample_pool,
+            capture_cursor,
         ) {
             Ok(_) => {
                 frame_count += 1;
@@ -278,6 +281,78 @@ pub unsafe fn get_frames(
     Ok(())
 }
 
+// Draw cursor using GDI
+unsafe fn draw_cursor_gdi(
+    texture: &ID3D11Texture2D,
+) -> Result<()> {
+    use windows::Win32::Graphics::Dxgi::IDXGISurface1;
+    use windows::Win32::Graphics::Gdi::DeleteObject;
+    use windows::Win32::UI::WindowsAndMessaging::{CURSORINFO, CURSOR_SHOWING, DI_NORMAL, DrawIconEx, GetCursorInfo, GetIconInfo};
+    use windows::Win32::Foundation::{BOOL, POINT};
+    use std::mem::size_of;
+    use log::{debug, error, trace};
+
+    // Get the surface interface from the texture
+    let surface: IDXGISurface1 = texture.cast()?;
+    
+    // Prepare cursor info structure
+    let mut cursor_info = CURSORINFO {
+        cbSize: size_of::<CURSORINFO>() as u32,
+        ..Default::default()
+    };
+    
+    // Get the current cursor info
+    let cursor_present = GetCursorInfo(&mut cursor_info as *mut CURSORINFO);
+    
+    // If cursor is not showing or we couldn't get info, just return
+    if !cursor_present.as_bool() || (cursor_info.flags.0 & CURSOR_SHOWING.0 != CURSOR_SHOWING.0) {
+        debug!("Cursor is not visible, skipping drawing");
+        return Ok(());
+    }
+    
+    // Get cursor hotspot
+    let mut icon_info = Default::default();
+    let result = GetIconInfo(cursor_info.hCursor, &mut icon_info);
+    
+    if !result.as_bool() {
+        error!("Failed to get icon info");
+        return Err(Error::from_win32());
+    }
+    
+    let hotspot_x = icon_info.xHotspot as i32;
+    let hotspot_y = icon_info.yHotspot as i32;
+    
+    // Clean up icon info resources
+    if !icon_info.hbmMask.is_invalid() {
+        DeleteObject(icon_info.hbmMask);
+    }
+    if !icon_info.hbmColor.is_invalid() {
+        DeleteObject(icon_info.hbmColor);
+    }
+    
+    // Get DC from surface
+    let hdc = surface.GetDC(BOOL::from(false))?;
+    
+    // Draw cursor using GDI
+    let result = DrawIconEx(
+        hdc,
+        cursor_info.ptScreenPos.x - hotspot_x,
+        cursor_info.ptScreenPos.y - hotspot_y,
+        cursor_info.hCursor,
+        0, 0, 0, None, DI_NORMAL,
+    );
+    
+    if !result.as_bool() {
+        error!("Failed to draw cursor with GDI");
+    }
+    
+    // Release DC
+    surface.ReleaseDC(None)?;
+    
+    Ok(())
+}
+
+// Now let's update the process_frame function to use our new cursor drawing approach
 unsafe fn process_frame(
     duplication: &IDXGIOutputDuplication,
     context_mutex: &Arc<Mutex<ID3D11DeviceContext>>,
@@ -293,6 +368,7 @@ unsafe fn process_frame(
     num_duped: &mut u64,
     texture_pool: &Arc<TexturePool>,
     sample_pool: &Arc<SamplePool>,
+    capture_cursor: bool,
 ) -> std::result::Result<(), FrameError> {
     let mut resource: Option<IDXGIResource> = None;
     let mut info = windows::Win32::Graphics::Dxgi::DXGI_OUTDUPL_FRAME_INFO::default();
@@ -321,39 +397,52 @@ unsafe fn process_frame(
     
     duplication.AcquireNextFrame(16, &mut info, &mut resource)?;
     
-    let context = context_mutex.lock().unwrap();
-    
-    if let Some(resource) = resource {
-        // Acquire a texture from the pool rather than creating a new one every time
-        let pooled_texture = texture_pool.acquire().map_err(|e| {
-            log::error!("Failed to acquire texture from pool: {:?}", e);
-            // Convert to WindowsError first if needed, or just use TexturePoolError variant
-            FrameError::TexturePoolError
-        })?;
+    // Process the frame with context lock
+    {
+        let context = context_mutex.lock().unwrap();
         
-        // Get the source texture from the resource
-        let source_texture: ID3D11Texture2D = resource.cast()?;
-        
-        if should_show_content {
-            // Copy content from source to pooled texture
-            context.CopyResource(&pooled_texture, &source_texture);
+        if let Some(resource) = resource.as_ref() {
+            // Acquire a texture from the pool
+            let pooled_texture = texture_pool.acquire().map_err(|e| {
+                log::error!("Failed to acquire texture from pool: {:?}", e);
+                FrameError::TexturePoolError
+            })?;
             
-            // Then copy from pooled to staging texture
-            context.CopyResource(staging_texture, &pooled_texture);
-        } else {
-            // Window not in focus, just use blank screen
-            context.CopyResource(staging_texture, blank_texture);
+            // Get the source texture from the resource
+            let source_texture: ID3D11Texture2D = resource.cast()?;
+            
+            if should_show_content {
+                // Copy content from source to pooled texture
+                context.CopyResource(&pooled_texture, &source_texture);
+                
+                // Copy from pooled to staging texture
+                context.CopyResource(staging_texture, &pooled_texture);
+            } else {
+                // Window not in focus, just use blank screen
+                context.CopyResource(staging_texture, blank_texture);
+            }
+            
+            // Return the pooled texture to the pool
+            texture_pool.release(pooled_texture);
         }
         
-        // Release the original texture and frame
-        drop(source_texture);
-        duplication.ReleaseFrame()?;
-        
-        // Return the pooled texture to the pool when done
-        texture_pool.release(pooled_texture);
+        // Context lock is automatically dropped at the end of this scope
     }
     
-    drop(context);
+    // Draw cursor if needed (outside the context lock)
+    if capture_cursor && should_show_content && resource.is_some() {
+        // Use our GDI-based cursor drawing approach
+        if let Err(e) = draw_cursor_gdi(staging_texture) {
+            debug!("Failed to draw cursor: {:?}", e);
+        }
+    }
+    
+    // Release the frame
+    if let Some(resource) = resource {
+        let source_texture: ID3D11Texture2D = resource.cast()?;
+        drop(source_texture);
+        duplication.ReleaseFrame()?;
+    }
     
     // Handle frame timing and duplication
     while *accumulated_delay >= frame_duration {

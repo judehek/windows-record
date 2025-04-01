@@ -13,6 +13,7 @@ pub struct RecorderConfig {
     output_height: u32,
     video_bitrate: u32,
     video_encoder: VideoEncoderType,
+    capture_cursor: bool,
     
     // Audio settings
     capture_audio: bool,
@@ -59,6 +60,7 @@ impl Default for RecorderConfig {
             video_encoder: VideoEncoderType::default(),
             enable_replay_buffer: false,
             replay_buffer_seconds: 30,
+            capture_cursor: true,
         }
     }
 }
@@ -68,7 +70,7 @@ impl RecorderConfig {
         RecorderConfigBuilder::default()
     }
 
-    // Updated getter methods
+    // Getters
     pub fn fps_num(&self) -> u32 { self.fps_num }
     pub fn fps_den(&self) -> u32 { self.fps_den }
     pub fn input_width(&self) -> u32 { self.input_width }
@@ -87,6 +89,7 @@ impl RecorderConfig {
     pub fn microphone_device(&self) -> Option<&str> { self.microphone_device.as_deref() }
     pub fn enable_replay_buffer(&self) -> bool { self.enable_replay_buffer }
     pub fn replay_buffer_seconds(&self) -> u32 { self.replay_buffer_seconds }
+    pub fn capture_cursor(&self) -> bool { self.capture_cursor }
 }
 
 #[derive(Default)]
@@ -174,6 +177,11 @@ impl RecorderConfigBuilder {
     
     pub fn replay_buffer_seconds(mut self, seconds: u32) -> Self {
         self.config.replay_buffer_seconds = seconds;
+        self
+    }
+    
+    pub fn capture_cursor(mut self, enabled: bool) -> Self {
+        self.config.capture_cursor = enabled;
         self
     }
 
