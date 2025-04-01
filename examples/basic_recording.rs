@@ -19,12 +19,13 @@ fn main() -> Result<()> {
         .microphone_volume(1.0)
         .system_volume(1.0)
         .debug_mode(true)
+        .capture_cursor(true)
         .output_path("output.mp4")
         .build();
 
     // Create the recorder with your target window name
     let recorder = Recorder::new(config)?
-        .with_process_name("Chrome");
+        .with_process_name("League of Legends");
 
     // Short delay before starting recording
     std::thread::sleep(Duration::from_secs(1));

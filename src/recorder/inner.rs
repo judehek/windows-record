@@ -199,6 +199,8 @@ impl RecorderInner {
             let dev_clone = device.clone();
             let barrier_clone = barrier.clone();
             let process_name_clone = process_name.to_string();
+            // Copy the capture_cursor value before using it in the thread
+            let capture_cursor = config.capture_cursor();
             collect_video_handle = Some(std::thread::spawn(move || {
                 info!("Video capture thread started");
                 let result = get_frames(
@@ -214,6 +216,7 @@ impl RecorderInner {
                     dev_clone,
                     context_mutex,
                     use_exact_match,
+                    capture_cursor,
                 );
                 info!("Video capture thread completed with result: {:?}", result.is_ok());
                 result
