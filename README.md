@@ -132,3 +132,5 @@ This will use all default settings and just specify the output file.
 
 - More robust audio sync
 - Audio format configurability
+
+- cursor recording (currently having issues with gdi compatability and nv12 output type)

@@ -6,13 +6,13 @@ use std::sync::{Barrier, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::Error;
 use windows::core::{ComInterface, Error as WindowsError, Result};
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{BOOL, HWND};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::{IDXGIOutputDuplication, IDXGIResource};
 use windows::Win32::System::Threading::*;
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
-use super::dxgi::{create_blank_dxgi_texture, setup_dxgi_duplication, process_cursor, CursorInfo};
+use super::dxgi::{create_blank_dxgi_texture, setup_dxgi_duplication};
 use super::window::{is_window_valid, get_window_title};
 use crate::capture::dxgi::create_staging_texture;
 use crate::types::{SendableSample, TexturePool, SamplePool};
@@ -281,246 +281,81 @@ pub unsafe fn get_frames(
     Ok(())
 }
 
-/// Render cursor onto the texture using D3D11 context
-unsafe fn draw_cursor(
-    context: &ID3D11DeviceContext,
+// New GDI-based cursor drawing function
+unsafe fn draw_cursor_gdi(
     texture: &ID3D11Texture2D,
-    cursor_info: &CursorInfo,
 ) -> Result<()> {
-    use windows::Win32::Graphics::Direct3D11::*;
-    use windows::Win32::Graphics::Dxgi::Common::*;
+    use windows::Win32::Graphics::Dxgi::IDXGISurface1;
+    use windows::Win32::Graphics::Gdi::DeleteObject;
+    use windows::Win32::UI::WindowsAndMessaging::{CURSORINFO, CURSOR_SHOWING, DI_NORMAL, DrawIconEx, GetCursorInfo, GetIconInfo};
+    use windows::Win32::Foundation::{BOOL, POINT};
+    use std::mem::size_of;
+    use log::{debug, error, trace};
 
-    // Early return if cursor is not visible or no shape is available
-    if !cursor_info.visible || cursor_info.shape.is_none() {
+    // Get the surface interface from the texture
+    let surface: IDXGISurface1 = texture.cast()?;
+    
+    // Prepare cursor info structure
+    let mut cursor_info = CURSORINFO {
+        cbSize: size_of::<CURSORINFO>() as u32,
+        ..Default::default()
+    };
+    
+    // Get the current cursor info
+    let cursor_present = GetCursorInfo(&mut cursor_info as *mut CURSORINFO);
+    
+    // If cursor is not showing or we couldn't get info, just return
+    // Fixed: use as_bool() instead of is_err()
+    if !cursor_present.as_bool() || (cursor_info.flags.0 & CURSOR_SHOWING.0 != CURSOR_SHOWING.0) {
+        debug!("Cursor is not visible, skipping drawing");
         return Ok(());
     }
-
-    // Get device from context
-    let device = context.GetDevice()?;
-
-    // Get texture description to know dimensions
-    let mut desc = D3D11_TEXTURE2D_DESC::default();
-    texture.GetDesc(&mut desc);
-
-    let (cursor_x, cursor_y) = cursor_info.position;
-    let (hotspot_x, hotspot_y) = cursor_info.hotspot;
-
-    // Adjust cursor position based on hotspot
-    let cursor_x = cursor_x - hotspot_x as i32;
-    let cursor_y = cursor_y - hotspot_y as i32;
-
-    // Draw cursor based on type
-    if let Some(shape) = &cursor_info.shape {
-        match shape {
-            super::dxgi::CursorShape::Color(data, width, height) => {
-                // Setup for Color cursor (true alpha)
-                draw_alpha_cursor(
-                    &device, context, texture, data, *width, *height, 
-                    cursor_x, cursor_y, desc.Width, desc.Height
-                )?;
-            },
-            super::dxgi::CursorShape::MaskedColor(data, width, height) => {
-                // Setup for MaskedColor cursor (might need special handling)
-                // For now, treat similarly to Color cursor
-                draw_alpha_cursor(
-                    &device, context, texture, data, *width, *height, 
-                    cursor_x, cursor_y, desc.Width, desc.Height
-                )?;
-            },
-            super::dxgi::CursorShape::Monochrome(data, width, height) => {
-                // Implement monochrome cursor rendering (XOR style usually)
-                debug!("Monochrome cursor detected - width: {}, height: {}", width, height);
-                draw_monochrome_cursor(
-                    &device, context, texture, data, *width, *height,
-                    cursor_x, cursor_y, desc.Width, desc.Height
-                )?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-// Helper function to draw cursor with alpha blending
-unsafe fn draw_alpha_cursor(
-    device: &ID3D11Device,
-    context: &ID3D11DeviceContext,
-    texture: &ID3D11Texture2D,
-    data: &[u8],
-    width: u32,
-    height: u32,
-    cursor_x: i32,
-    cursor_y: i32,
-    screen_width: u32,
-    screen_height: u32,
-) -> Result<()> {
-    use windows::Win32::Graphics::Direct3D11::*;
-    use windows::Win32::Graphics::Dxgi::Common::*;
-
-    // Create cursor texture
-    use log::{debug, error, trace, warn};
     
-    debug!("Creating cursor texture {}x{}", width, height);
-    let cursor_desc = D3D11_TEXTURE2D_DESC {
-        Width: width,
-        Height: height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE,
-        CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(0),
-        MiscFlags: D3D11_RESOURCE_MISC_FLAG(0),
-    };
+    // Get cursor hotspot
+    let mut icon_info = Default::default();
+    let result = GetIconInfo(cursor_info.hCursor, &mut icon_info);
     
-    // Create initial data
-    let stride = width * 4; // BGRA format = 4 bytes per pixel
-    let initial_data = D3D11_SUBRESOURCE_DATA {
-        pSysMem: data.as_ptr() as *const _,
-        SysMemPitch: stride,
-        SysMemSlicePitch: 0,
-    };
-    
-    // Create cursor texture
-    let mut cursor_texture = None;
-    device.CreateTexture2D(&cursor_desc, Some(&initial_data), Some(&mut cursor_texture))?;
-    let cursor_texture = cursor_texture.unwrap();
-    
-    // Skip render target view and just use direct copy method
-    // Because we're getting CREATERENDERTARGETVIEW_INVALIDRESOURCE errors
-    debug!("Using direct copy method for cursor overlay");
-    
-    // Skip all the rendering setup and just use CopySubresourceRegion
-    // This is simpler but won't handle transparency perfectly
-    
-    // Here you would normally set vertex buffer, shaders, etc.
-    // For simplicity, using a full-screen quad approach with texcoords
-    
-    // TODO: Implement proper shader-based drawing here
-    // For now, falling back to CopySubresourceRegion with limitations
-    
-    // Calculate destination coordinates (clamping to screen edges)
-    let dest_x = cursor_x.max(0).min(screen_width as i32);
-    let dest_y = cursor_y.max(0).min(screen_height as i32);
-    
-    // Calculate copy region (taking screen boundaries into account)
-    let copy_width = width.min(screen_width - dest_x as u32);
-    let copy_height = height.min(screen_height - dest_y as u32);
-    
-    if copy_width > 0 && copy_height > 0 {
-        // Create box for source region
-        let src_box = D3D11_BOX {
-            left: 0,
-            top: 0,
-            front: 0,
-            right: copy_width,
-            bottom: copy_height,
-            back: 1,
-        };
-        
-        // Copy cursor texture onto the frame texture
-        context.CopySubresourceRegion(
-            texture,
-            0,
-            dest_x as u32,
-            dest_y as u32,
-            0,
-            &cursor_texture,
-            0,
-            Some(&src_box),
-        );
+    // Fixed: use as_bool() instead of is_err()
+    if !result.as_bool() {
+        error!("Failed to get icon info");
+        return Err(Error::from_win32());
     }
     
-    // No state to restore since we're not using render targets
+    let hotspot_x = icon_info.xHotspot as i32;
+    let hotspot_y = icon_info.yHotspot as i32;
+    
+    // Clean up icon info resources
+    if !icon_info.hbmMask.is_invalid() {
+        DeleteObject(icon_info.hbmMask);
+    }
+    if !icon_info.hbmColor.is_invalid() {
+        DeleteObject(icon_info.hbmColor);
+    }
+    
+    // Get DC from surface
+    let hdc = surface.GetDC(BOOL::from(false))?;
+    
+    // Draw cursor using GDI
+    let result = DrawIconEx(
+        hdc,
+        cursor_info.ptScreenPos.x - hotspot_x,
+        cursor_info.ptScreenPos.y - hotspot_y,
+        cursor_info.hCursor,
+        0, 0, 0, None, DI_NORMAL,
+    );
+    
+    // Fixed: use as_bool() instead of is_err()
+    if !result.as_bool() {
+        error!("Failed to draw cursor with GDI");
+    }
+    
+    // Release DC
+    surface.ReleaseDC(None)?;
     
     Ok(())
 }
 
-// Helper function for monochrome cursors
-unsafe fn draw_monochrome_cursor(
-    device: &ID3D11Device,
-    context: &ID3D11DeviceContext,
-    texture: &ID3D11Texture2D,
-    data: &[u8],
-    width: u32,
-    height: u32,
-    cursor_x: i32,
-    cursor_y: i32,
-    screen_width: u32,
-    screen_height: u32,
-) -> Result<()> {
-    // For monochrome cursors, we need to convert the AND/XOR mask to BGRA
-    // This is a simplified implementation - for complete solution, you'd need to:
-    // 1. Split the data into AND and XOR masks
-    // 2. Apply them properly to create BGRA data
-    
-    debug!("Processing monochrome cursor, data length: {}", data.len());
-    
-    // For now, create a simple white cursor with black border for testing
-    // In a real implementation, you'd properly process the AND/XOR mask
-    let bytes_per_row = (width + 7) / 8; // Packed bits
-    let mask_size = bytes_per_row * height;
-    
-    // Process AND mask (first part of data) and XOR mask (second part)
-    // AND mask: 0=opaque, 1=transparent
-    // XOR mask: 0=black, 1=white
-    
-    let and_mask = &data[0..mask_size as usize];
-    let xor_mask = &data[mask_size as usize..];
-    
-    // Create BGRA data based on AND/XOR masks
-    let mut bgra_data = vec![0u8; (width * height * 4) as usize];
-    
-    for y in 0..height {
-        for x in 0..width {
-            let bit_index = x % 8;
-            let byte_index = (y * bytes_per_row + x / 8) as usize;
-            
-            if byte_index < and_mask.len() {
-                let and_bit = (and_mask[byte_index] >> (7 - bit_index)) & 1;
-                let xor_bit = if byte_index < xor_mask.len() {
-                    (xor_mask[byte_index] >> (7 - bit_index)) & 1 
-                } else { 0 };
-                
-                let pixel_index = ((y * width + x) * 4) as usize;
-                
-                // Set BGRA based on AND and XOR bits
-                if and_bit == 1 {
-                    // Transparent
-                    bgra_data[pixel_index + 0] = 0; // B
-                    bgra_data[pixel_index + 1] = 0; // G
-                    bgra_data[pixel_index + 2] = 0; // R
-                    bgra_data[pixel_index + 3] = 0; // A (transparent)
-                } else {
-                    // Opaque
-                    if xor_bit == 1 {
-                        // White
-                        bgra_data[pixel_index + 0] = 255; // B
-                        bgra_data[pixel_index + 1] = 255; // G
-                        bgra_data[pixel_index + 2] = 255; // R
-                    } else {
-                        // Black
-                        bgra_data[pixel_index + 0] = 0; // B
-                        bgra_data[pixel_index + 1] = 0; // G
-                        bgra_data[pixel_index + 2] = 0; // R
-                    }
-                    bgra_data[pixel_index + 3] = 255; // A (opaque)
-                }
-            }
-        }
-    }
-    
-    // Now draw using the generated BGRA data
-    draw_alpha_cursor(
-        device, context, texture, &bgra_data, width, height,
-        cursor_x, cursor_y, screen_width, screen_height
-    )
-}
-
+// Now let's update the process_frame function to use our new cursor drawing approach
 unsafe fn process_frame(
     duplication: &IDXGIOutputDuplication,
     context_mutex: &Arc<Mutex<ID3D11DeviceContext>>,
@@ -565,62 +400,52 @@ unsafe fn process_frame(
     
     duplication.AcquireNextFrame(16, &mut info, &mut resource)?;
     
-    // Process cursor information if enabled
-    let cursor_info = if capture_cursor {
-        match process_cursor(duplication, &info) {
-            Ok(info) => Some(info),
-            Err(e) => {
-                debug!("Failed to process cursor: {:?}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-    
-    let context = context_mutex.lock().unwrap();
-    
-    if let Some(resource) = resource {
-        // Acquire a texture from the pool rather than creating a new one every time
-        let pooled_texture = texture_pool.acquire().map_err(|e| {
-            log::error!("Failed to acquire texture from pool: {:?}", e);
-            // Convert to WindowsError first if needed, or just use TexturePoolError variant
-            FrameError::TexturePoolError
-        })?;
+    // Process the frame with context lock
+    {
+        let context = context_mutex.lock().unwrap();
         
-        // Get the source texture from the resource
-        let source_texture: ID3D11Texture2D = resource.cast()?;
-        
-        if should_show_content {
-            // Copy content from source to pooled texture
-            context.CopyResource(&pooled_texture, &source_texture);
+        if let Some(resource) = resource.as_ref() {
+            // Acquire a texture from the pool
+            let pooled_texture = texture_pool.acquire().map_err(|e| {
+                log::error!("Failed to acquire texture from pool: {:?}", e);
+                FrameError::TexturePoolError
+            })?;
             
-            // Render cursor on top of content if available
-            if let Some(cursor_info) = &cursor_info {
-                if cursor_info.visible {
-                    // Draw cursor on the pooled texture
-                    if let Err(e) = draw_cursor(&context, &pooled_texture, cursor_info) {
-                        debug!("Failed to draw cursor: {:?}", e);
-                    }
-                }
+            // Get the source texture from the resource
+            let source_texture: ID3D11Texture2D = resource.cast()?;
+            
+            if should_show_content {
+                // Copy content from source to pooled texture
+                context.CopyResource(&pooled_texture, &source_texture);
+                
+                // Copy from pooled to staging texture
+                context.CopyResource(staging_texture, &pooled_texture);
+            } else {
+                // Window not in focus, just use blank screen
+                context.CopyResource(staging_texture, blank_texture);
             }
             
-            // Then copy from pooled to staging texture
-            context.CopyResource(staging_texture, &pooled_texture);
-        } else {
-            // Window not in focus, just use blank screen
-            context.CopyResource(staging_texture, blank_texture);
+            // Return the pooled texture to the pool
+            texture_pool.release(pooled_texture);
         }
         
-        // Release the original texture and frame
-        drop(source_texture);
-        duplication.ReleaseFrame()?;
-        
-        // Return the pooled texture to the pool when done
-        texture_pool.release(pooled_texture);
+        // Context lock is automatically dropped at the end of this scope
     }
     
-    drop(context);
+    // Draw cursor if needed (outside the context lock)
+    if capture_cursor && should_show_content && resource.is_some() {
+        // Use our GDI-based cursor drawing approach
+        if let Err(e) = draw_cursor_gdi(staging_texture) {
+            debug!("Failed to draw cursor: {:?}", e);
+        }
+    }
+    
+    // Release the frame
+    if let Some(resource) = resource {
+        let source_texture: ID3D11Texture2D = resource.cast()?;
+        drop(source_texture);
+        duplication.ReleaseFrame()?;
+    }
     
     // Handle frame timing and duplication
     while *accumulated_delay >= frame_duration {
