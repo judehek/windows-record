@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::sync::Barrier;
-use std::sync::RwLock; // Replace RefCell with RwLock
+use std::sync::RwLock;
 use std::thread::JoinHandle;
 use windows::core::{ComInterface, Result};
 use windows::Win32::Graphics::Direct3D::*;

@@ -3,35 +3,6 @@ use windows::core::{ComInterface, Result};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
-use windows::Win32::Foundation::*;
-
-/// Information about cursor in the frame
-#[derive(Clone, Debug)]
-pub struct CursorInfo {
-    pub visible: bool,
-    pub position: (i32, i32),
-    pub shape: Option<CursorShape>,
-    pub hotspot: (u32, u32),
-}
-
-/// Cursor shape type
-#[derive(Clone, Debug)]
-pub enum CursorShape {
-    Monochrome(Vec<u8>, u32, u32),
-    Color(Vec<u8>, u32, u32),
-    MaskedColor(Vec<u8>, u32, u32),
-}
-
-impl Default for CursorInfo {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            position: (0, 0),
-            shape: None,
-            hotspot: (0, 0),
-        }
-    }
-}
 
 pub unsafe fn setup_dxgi_duplication(device: &ID3D11Device) -> Result<IDXGIOutputDuplication> {
     // Get DXGI device
