@@ -135,7 +135,11 @@ pub unsafe fn create_blank_dxgi_texture(
     input_height: u32,
 ) -> Result<(ID3D11Texture2D, IDXGIResource)> {
     use windows::Win32::Graphics::Direct3D11::*;
+    use log::debug;
 
+    debug!("Creating blank DXGI texture with dimensions {}x{}", input_width, input_height);
+    
+    // Add RENDER_TARGET flag to allow using the texture as a render target
     let desc = D3D11_TEXTURE2D_DESC {
         Width: input_width,
         Height: input_height,
@@ -147,7 +151,7 @@ pub unsafe fn create_blank_dxgi_texture(
             Quality: 0,
         },
         Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET, // Add RENDER_TARGET flag
         CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(0),
         MiscFlags: D3D11_RESOURCE_MISC_FLAG(0),
     };

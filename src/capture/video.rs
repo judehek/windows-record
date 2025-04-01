@@ -163,6 +163,7 @@ pub unsafe fn get_frames(
     use windows::Win32::Graphics::Direct3D11::*;
 
     // Create a pool with capacity of 10 textures - adjust based on expected frame rate and processing time
+    // Create pool textures with RENDER_TARGET flag for cursor overlay
     let texture_pool = TexturePool::new(
         device.clone(),
         10, // Capacity
@@ -170,7 +171,7 @@ pub unsafe fn get_frames(
         input_height,
         DXGI_FORMAT_B8G8R8A8_UNORM,
         D3D11_USAGE_DEFAULT.0.try_into().unwrap(),
-        D3D11_BIND_SHADER_RESOURCE.0.try_into().unwrap(),
+        (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0.try_into().unwrap(),
         0, // CPU access flags
         0, // Misc flags
     )?;
@@ -288,102 +289,236 @@ unsafe fn draw_cursor(
 ) -> Result<()> {
     use windows::Win32::Graphics::Direct3D11::*;
     use windows::Win32::Graphics::Dxgi::Common::*;
-    
+
     // Early return if cursor is not visible or no shape is available
     if !cursor_info.visible || cursor_info.shape.is_none() {
         return Ok(());
     }
-    
+
+    // Get device from context
+    let device = context.GetDevice()?;
+
     // Get texture description to know dimensions
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     texture.GetDesc(&mut desc);
-    
+
     let (cursor_x, cursor_y) = cursor_info.position;
     let (hotspot_x, hotspot_y) = cursor_info.hotspot;
-    
+
     // Adjust cursor position based on hotspot
     let cursor_x = cursor_x - hotspot_x as i32;
     let cursor_y = cursor_y - hotspot_y as i32;
-    
+
     // Draw cursor based on type
     if let Some(shape) = &cursor_info.shape {
         match shape {
-            super::dxgi::CursorShape::Color(data, width, height) |
+            super::dxgi::CursorShape::Color(data, width, height) => {
+                // Setup for Color cursor (true alpha)
+                draw_alpha_cursor(
+                    &device, context, texture, data, *width, *height, 
+                    cursor_x, cursor_y, desc.Width, desc.Height
+                )?;
+            },
             super::dxgi::CursorShape::MaskedColor(data, width, height) => {
-                // Create a texture for the cursor
-                let cursor_desc = D3D11_TEXTURE2D_DESC {
-                    Width: *width,
-                    Height: *height,
-                    MipLevels: 1,
-                    ArraySize: 1,
-                    Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    SampleDesc: DXGI_SAMPLE_DESC {
-                        Count: 1,
-                        Quality: 0,
-                    },
-                    Usage: D3D11_USAGE_DEFAULT,
-                    BindFlags: D3D11_BIND_SHADER_RESOURCE,
-                    CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(0),
-                    MiscFlags: D3D11_RESOURCE_MISC_FLAG(0),
-                };
-                
-                // Create initial data
-                let stride = *width * 4; // BGRA format = 4 bytes per pixel
-                let initial_data = D3D11_SUBRESOURCE_DATA {
-                    pSysMem: data.as_ptr() as *const _,
-                    SysMemPitch: stride,
-                    SysMemSlicePitch: 0,
-                };
-                
-                // Get device from context
-                let device = context.GetDevice()?;
-                
-                // Create cursor texture
-                let mut cursor_texture = None;
-                device.CreateTexture2D(&cursor_desc, Some(&initial_data), Some(&mut cursor_texture))?;
-                let cursor_texture = cursor_texture.unwrap();
-                
-                // Calculate destination coordinates (clamping to screen edges)
-                let dest_x = cursor_x.max(0).min(desc.Width as i32);
-                let dest_y = cursor_y.max(0).min(desc.Height as i32);
-                
-                // Calculate copy region (taking screen boundaries into account)
-                let copy_width = (*width).min(desc.Width - dest_x as u32);
-                let copy_height = (*height).min(desc.Height - dest_y as u32);
-                
-                if copy_width > 0 && copy_height > 0 {
-                    // Create box for source and destination regions
-                    let src_box = D3D11_BOX {
-                        left: 0,
-                        top: 0,
-                        front: 0,
-                        right: copy_width,
-                        bottom: copy_height,
-                        back: 1,
-                    };
-                    
-                    // Copy cursor texture onto the frame texture
-                    context.CopySubresourceRegion(
-                        texture,
-                        0,
-                        dest_x as u32,
-                        dest_y as u32,
-                        0,
-                        &cursor_texture,
-                        0,
-                        Some(&src_box),
-                    );
-                }
+                // Setup for MaskedColor cursor (might need special handling)
+                // For now, treat similarly to Color cursor
+                draw_alpha_cursor(
+                    &device, context, texture, data, *width, *height, 
+                    cursor_x, cursor_y, desc.Width, desc.Height
+                )?;
             },
             super::dxgi::CursorShape::Monochrome(data, width, height) => {
-                // Monochrome cursors would require more complex processing
-                // to convert them to BGRA format for rendering
-                trace!("Monochrome cursor rendering not implemented");
+                // Implement monochrome cursor rendering (XOR style usually)
+                debug!("Monochrome cursor detected - width: {}, height: {}", width, height);
+                draw_monochrome_cursor(
+                    &device, context, texture, data, *width, *height,
+                    cursor_x, cursor_y, desc.Width, desc.Height
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// Helper function to draw cursor with alpha blending
+unsafe fn draw_alpha_cursor(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    texture: &ID3D11Texture2D,
+    data: &[u8],
+    width: u32,
+    height: u32,
+    cursor_x: i32,
+    cursor_y: i32,
+    screen_width: u32,
+    screen_height: u32,
+) -> Result<()> {
+    use windows::Win32::Graphics::Direct3D11::*;
+    use windows::Win32::Graphics::Dxgi::Common::*;
+
+    // Create cursor texture
+    use log::{debug, error, trace, warn};
+    
+    debug!("Creating cursor texture {}x{}", width, height);
+    let cursor_desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE,
+        CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(0),
+        MiscFlags: D3D11_RESOURCE_MISC_FLAG(0),
+    };
+    
+    // Create initial data
+    let stride = width * 4; // BGRA format = 4 bytes per pixel
+    let initial_data = D3D11_SUBRESOURCE_DATA {
+        pSysMem: data.as_ptr() as *const _,
+        SysMemPitch: stride,
+        SysMemSlicePitch: 0,
+    };
+    
+    // Create cursor texture
+    let mut cursor_texture = None;
+    device.CreateTexture2D(&cursor_desc, Some(&initial_data), Some(&mut cursor_texture))?;
+    let cursor_texture = cursor_texture.unwrap();
+    
+    // Skip render target view and just use direct copy method
+    // Because we're getting CREATERENDERTARGETVIEW_INVALIDRESOURCE errors
+    debug!("Using direct copy method for cursor overlay");
+    
+    // Skip all the rendering setup and just use CopySubresourceRegion
+    // This is simpler but won't handle transparency perfectly
+    
+    // Here you would normally set vertex buffer, shaders, etc.
+    // For simplicity, using a full-screen quad approach with texcoords
+    
+    // TODO: Implement proper shader-based drawing here
+    // For now, falling back to CopySubresourceRegion with limitations
+    
+    // Calculate destination coordinates (clamping to screen edges)
+    let dest_x = cursor_x.max(0).min(screen_width as i32);
+    let dest_y = cursor_y.max(0).min(screen_height as i32);
+    
+    // Calculate copy region (taking screen boundaries into account)
+    let copy_width = width.min(screen_width - dest_x as u32);
+    let copy_height = height.min(screen_height - dest_y as u32);
+    
+    if copy_width > 0 && copy_height > 0 {
+        // Create box for source region
+        let src_box = D3D11_BOX {
+            left: 0,
+            top: 0,
+            front: 0,
+            right: copy_width,
+            bottom: copy_height,
+            back: 1,
+        };
+        
+        // Copy cursor texture onto the frame texture
+        context.CopySubresourceRegion(
+            texture,
+            0,
+            dest_x as u32,
+            dest_y as u32,
+            0,
+            &cursor_texture,
+            0,
+            Some(&src_box),
+        );
+    }
+    
+    // No state to restore since we're not using render targets
+    
+    Ok(())
+}
+
+// Helper function for monochrome cursors
+unsafe fn draw_monochrome_cursor(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    texture: &ID3D11Texture2D,
+    data: &[u8],
+    width: u32,
+    height: u32,
+    cursor_x: i32,
+    cursor_y: i32,
+    screen_width: u32,
+    screen_height: u32,
+) -> Result<()> {
+    // For monochrome cursors, we need to convert the AND/XOR mask to BGRA
+    // This is a simplified implementation - for complete solution, you'd need to:
+    // 1. Split the data into AND and XOR masks
+    // 2. Apply them properly to create BGRA data
+    
+    debug!("Processing monochrome cursor, data length: {}", data.len());
+    
+    // For now, create a simple white cursor with black border for testing
+    // In a real implementation, you'd properly process the AND/XOR mask
+    let bytes_per_row = (width + 7) / 8; // Packed bits
+    let mask_size = bytes_per_row * height;
+    
+    // Process AND mask (first part of data) and XOR mask (second part)
+    // AND mask: 0=opaque, 1=transparent
+    // XOR mask: 0=black, 1=white
+    
+    let and_mask = &data[0..mask_size as usize];
+    let xor_mask = &data[mask_size as usize..];
+    
+    // Create BGRA data based on AND/XOR masks
+    let mut bgra_data = vec![0u8; (width * height * 4) as usize];
+    
+    for y in 0..height {
+        for x in 0..width {
+            let bit_index = x % 8;
+            let byte_index = (y * bytes_per_row + x / 8) as usize;
+            
+            if byte_index < and_mask.len() {
+                let and_bit = (and_mask[byte_index] >> (7 - bit_index)) & 1;
+                let xor_bit = if byte_index < xor_mask.len() {
+                    (xor_mask[byte_index] >> (7 - bit_index)) & 1 
+                } else { 0 };
+                
+                let pixel_index = ((y * width + x) * 4) as usize;
+                
+                // Set BGRA based on AND and XOR bits
+                if and_bit == 1 {
+                    // Transparent
+                    bgra_data[pixel_index + 0] = 0; // B
+                    bgra_data[pixel_index + 1] = 0; // G
+                    bgra_data[pixel_index + 2] = 0; // R
+                    bgra_data[pixel_index + 3] = 0; // A (transparent)
+                } else {
+                    // Opaque
+                    if xor_bit == 1 {
+                        // White
+                        bgra_data[pixel_index + 0] = 255; // B
+                        bgra_data[pixel_index + 1] = 255; // G
+                        bgra_data[pixel_index + 2] = 255; // R
+                    } else {
+                        // Black
+                        bgra_data[pixel_index + 0] = 0; // B
+                        bgra_data[pixel_index + 1] = 0; // G
+                        bgra_data[pixel_index + 2] = 0; // R
+                    }
+                    bgra_data[pixel_index + 3] = 255; // A (opaque)
+                }
             }
         }
     }
     
-    Ok(())
+    // Now draw using the generated BGRA data
+    draw_alpha_cursor(
+        device, context, texture, &bgra_data, width, height,
+        cursor_x, cursor_y, screen_width, screen_height
+    )
 }
 
 unsafe fn process_frame(
