@@ -569,7 +569,6 @@ impl Drop for RecorderInner {
 
 unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     info!("Creating D3D11 device");
-    // This function remains unchanged
     let feature_levels = [
         D3D_FEATURE_LEVEL_11_1,
         D3D_FEATURE_LEVEL_11_0,
@@ -584,7 +583,7 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     let mut device = None;
     let mut context = None;
     
-    // Base flags always include BGRA support
+    // Base flags
     let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
     info!("Base D3D11 creation flags: {:?}", flags);
     
