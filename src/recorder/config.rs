@@ -13,6 +13,7 @@ pub struct RecorderConfig {
     output_height: u32,
     video_bitrate: u32,
     video_encoder: VideoEncoderType,
+    video_encoder_name: Option<String>, // Add this new field for encoder name
     capture_cursor: bool,
     
     // Audio settings
@@ -58,6 +59,7 @@ impl Default for RecorderConfig {
             system_volume: None,
             microphone_device: None,
             video_encoder: VideoEncoderType::default(),
+            video_encoder_name: None, // Initialize as None
             enable_replay_buffer: false,
             replay_buffer_seconds: 30,
             capture_cursor: true,
@@ -83,6 +85,7 @@ impl RecorderConfig {
     pub fn debug_mode(&self) -> bool { self.debug_mode }
     pub fn video_bitrate(&self) -> u32 { self.video_bitrate }
     pub fn video_encoder(&self) -> &VideoEncoderType { &self.video_encoder }
+    pub fn video_encoder_name(&self) -> Option<&str> { self.video_encoder_name.as_deref() } // Add getter for encoder name
     pub fn microphone_volume(&self) -> Option<f32> { self.microphone_volume }
     pub fn audio_source(&self) -> &AudioSource { &self.audio_source }
     pub fn system_volume(&self) -> Option<f32> { self.system_volume }
@@ -167,6 +170,12 @@ impl RecorderConfigBuilder {
     
     pub fn video_encoder(mut self, encoder: VideoEncoderType) -> Self {
         self.config.video_encoder = encoder;
+        self
+    }
+    
+    // Add a new builder method for video encoder name
+    pub fn video_encoder_name<S: Into<String>>(mut self, name: S) -> Self {
+        self.config.video_encoder_name = Some(name.into());
         self
     }
     

@@ -14,11 +14,11 @@ pub unsafe fn create_sink_writer(
     capture_audio: bool,
     capture_microphone: bool,
     video_bitrate: u32,
-    video_encoder_id: &GUID,
+    video_encoder_guid: &GUID, // Changed parameter name to reflect it's a GUID
 ) -> Result<IMFSinkWriter> {
     info!("create_sink_writer - Starting with path: {}", output_path);
     info!("create_sink_writer - Parameters: fps={}/{}, resolution={}x{}, audio={}, mic={}, bitrate={}, encoder={:?}", 
-          fps_num, fps_den, output_width, output_height, capture_audio, capture_microphone, video_bitrate, video_encoder_id);
+          fps_num, fps_den, output_width, output_height, capture_audio, capture_microphone, video_bitrate, video_encoder_guid);
     
     // Create and configure attributes
     info!("create_sink_writer - Creating sink attributes");
@@ -38,7 +38,7 @@ pub unsafe fn create_sink_writer(
 
     // Configure video stream (always stream index 0)
     info!("create_sink_writer - Configuring video stream at index {}", current_stream_index);
-    configure_video_stream(&sink_writer, fps_num, fps_den, output_width, output_height, video_bitrate, video_encoder_id)?;
+    configure_video_stream(&sink_writer, fps_num, fps_den, output_width, output_height, video_bitrate, video_encoder_guid)?;
     info!("create_sink_writer - Video stream configured successfully");
     current_stream_index += 1;
 

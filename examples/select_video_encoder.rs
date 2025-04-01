@@ -1,7 +1,9 @@
 use std::time::Duration;
 use std::{env, io};
 use log::{error, info};
-use windows_record::{enumerate_video_encoders, VideoEncoderType, Recorder, Result, RecorderConfig};
+use windows_record::{
+    enumerate_video_encoders, get_preferred_video_encoder_by_type, Recorder, RecorderConfig, RecorderError, Result, VideoEncoderType
+};
 
 fn main() -> Result<()> {
     // Set up logging to see resource tracking in debug builds
@@ -14,7 +16,7 @@ fn main() -> Result<()> {
     
     info!("Available video encoders:");
     for (i, encoder) in encoders.iter().enumerate() {
-        info!("{}. {}", i + 1, encoder.name);
+        info!("{}. {} ({:?})", i + 1, encoder.name, encoder.encoder_type);
     }
     
     // Prompt user to select an encoder
@@ -23,23 +25,22 @@ fn main() -> Result<()> {
     io::stdin().read_line(&mut input).expect("Failed to read input");
     let encoder_idx: usize = input.trim().parse().unwrap_or(0);
     
-    // Get selected encoder type or default
-    let selected_encoder_type = if encoder_idx > 0 && encoder_idx <= encoders.len() {
-        match encoders[encoder_idx - 1].name.as_str() {
-            "H.264 (AVC)" => VideoEncoderType::H264,
-            "H.265 (HEVC)" => VideoEncoderType::HEVC,
-            _ => VideoEncoderType::default(),
-        }
+    // Get selected encoder or default
+    let selected_encoder = if encoder_idx > 0 && encoder_idx <= encoders.len() {
+        encoders[encoder_idx - 1].clone()
     } else {
-        VideoEncoderType::default()
+        // Try to get a preferred encoder, otherwise error out
+        get_preferred_video_encoder_by_type(VideoEncoderType::H264)
+            .or_else(|| get_preferred_video_encoder_by_type(VideoEncoderType::HEVC))
+            .ok_or_else(|| {
+                error!("No suitable video encoders found on the system");
+                RecorderError::Generic(
+                    "No suitable video encoders found on the system".to_string()
+                )
+            })?
     };
     
-    let encoder_name = match selected_encoder_type {
-        VideoEncoderType::H264 => "H.264 (AVC)",
-        VideoEncoderType::HEVC => "H.265 (HEVC)",
-    };
-    
-    info!("Selected encoder: {}", encoder_name);
+    info!("Selected encoder: {} ({:?})", selected_encoder.name, selected_encoder.encoder_type);
     
     // Create a recorder with the selected encoder
     let config = RecorderConfig::builder()
@@ -48,7 +49,8 @@ fn main() -> Result<()> {
         .output_dimensions(1920, 1080)
         .capture_audio(true)
         .capture_microphone(false)
-        .video_encoder(selected_encoder_type)
+        .video_encoder(selected_encoder.encoder_type) // Use the encoder type from selected encoder
+        .video_encoder_name(&selected_encoder.name)   // Add this line to specify encoder by name
         .output_path("encoder_test.mp4")
         .build();
     
@@ -56,7 +58,7 @@ fn main() -> Result<()> {
     let recorder = Recorder::new(config)?
         .with_process_name("Chrome");
 
-    info!("Starting recording with {} encoder.", encoder_name);
+    info!("Starting recording with {} encoder.", selected_encoder.name);
 
     // Short delay before starting recording
     std::thread::sleep(Duration::from_secs(1));
@@ -71,9 +73,9 @@ fn main() -> Result<()> {
         }
     }
     
-    // Record for 10 seconds
-    info!("Recording for 10 seconds...");
-    std::thread::sleep(Duration::from_secs(10));
+    // Record for 30 seconds
+    info!("Recording for 30 seconds...");
+    std::thread::sleep(Duration::from_secs(30));
 
     // Stop recording
     recorder.stop_recording()?;

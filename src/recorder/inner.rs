@@ -123,9 +123,24 @@ impl RecorderInner {
             info!("Media Foundation initialized successfully");
 
             // Get the video encoder
-            info!("Getting video encoder: {:?}", config.video_encoder());
-            let video_encoder = get_video_encoder_by_type(config.video_encoder())?;
-            info!("Video encoder obtained: {:?}", video_encoder.id);
+            info!("Getting video encoder");
+            let video_encoder = if let Some(encoder_name) = config.video_encoder_name() {
+                info!("Looking for encoder by name: '{}'", encoder_name);
+                match crate::device::get_video_encoder_by_name(encoder_name) {
+                    Some(encoder) => {
+                        info!("Found encoder by name: '{}' ({:?})", encoder_name, encoder.encoder_type);
+                        encoder
+                    },
+                    None => {
+                        info!("Encoder '{}' not found, falling back to type", encoder_name);
+                        crate::device::get_video_encoder_by_type(*config.video_encoder())?
+                    }
+                }
+            } else {
+                info!("Looking for encoder by type: {:?}", config.video_encoder());
+                crate::device::get_video_encoder_by_type(*config.video_encoder())?
+            };
+            info!("Video encoder obtained: {} ({:?})", video_encoder.name, video_encoder.encoder_type);
             
             // Create and configure media sink
             info!("Creating media sink writer for path: {}", output_path);
@@ -138,7 +153,7 @@ impl RecorderInner {
                 capture_audio,
                 capture_microphone,
                 video_bitrate,
-                &video_encoder.id,
+                &video_encoder.output_format_guid, // Use output_format_guid instead of id
             )?;
             info!("Media sink writer created successfully");
 
@@ -451,8 +466,23 @@ impl RecorderInner {
             }
     
             info!("Getting video encoder for replay file");
-            let video_encoder = get_video_encoder_by_type(self.config.video_encoder())?;
-            info!("Video encoder obtained: {:?}", video_encoder.id);
+            let video_encoder = if let Some(encoder_name) = self.config.video_encoder_name() {
+                info!("Looking for encoder by name: '{}'", encoder_name);
+                match crate::device::get_video_encoder_by_name(encoder_name) {
+                    Some(encoder) => {
+                        info!("Found encoder by name: '{}' ({:?})", encoder_name, encoder.encoder_type);
+                        encoder
+                    },
+                    None => {
+                        info!("Encoder '{}' not found, falling back to type", encoder_name);
+                        crate::device::get_video_encoder_by_type(*self.config.video_encoder())?
+                    }
+                }
+            } else {
+                info!("Looking for encoder by type: {:?}", self.config.video_encoder());
+                crate::device::get_video_encoder_by_type(*self.config.video_encoder())?
+            };
+            info!("Video encoder obtained: {} ({:?})", video_encoder.name, video_encoder.encoder_type);
                 
             info!("Creating sink writer for replay file");
             let media_sink = media::create_sink_writer(
@@ -464,7 +494,7 @@ impl RecorderInner {
                 self.config.capture_audio(),
                 self.config.capture_microphone(),
                 self.config.video_bitrate(),
-                &video_encoder.id,
+                &video_encoder.output_format_guid, // Use output_format_guid instead of id
             )?;
             info!("Created sink writer for replay file");
             
