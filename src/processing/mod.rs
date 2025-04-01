@@ -74,7 +74,6 @@ pub fn process_samples(
         None
     };
 
-    // Updated to use input/output dimensions
     let converter = unsafe { 
         video::setup_video_converter(
             input_width, 

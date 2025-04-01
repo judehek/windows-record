@@ -281,7 +281,7 @@ pub unsafe fn get_frames(
     Ok(())
 }
 
-// New GDI-based cursor drawing function
+// Draw cursor using GDI
 unsafe fn draw_cursor_gdi(
     texture: &ID3D11Texture2D,
 ) -> Result<()> {
@@ -305,7 +305,6 @@ unsafe fn draw_cursor_gdi(
     let cursor_present = GetCursorInfo(&mut cursor_info as *mut CURSORINFO);
     
     // If cursor is not showing or we couldn't get info, just return
-    // Fixed: use as_bool() instead of is_err()
     if !cursor_present.as_bool() || (cursor_info.flags.0 & CURSOR_SHOWING.0 != CURSOR_SHOWING.0) {
         debug!("Cursor is not visible, skipping drawing");
         return Ok(());
@@ -315,7 +314,6 @@ unsafe fn draw_cursor_gdi(
     let mut icon_info = Default::default();
     let result = GetIconInfo(cursor_info.hCursor, &mut icon_info);
     
-    // Fixed: use as_bool() instead of is_err()
     if !result.as_bool() {
         error!("Failed to get icon info");
         return Err(Error::from_win32());
@@ -344,7 +342,6 @@ unsafe fn draw_cursor_gdi(
         0, 0, 0, None, DI_NORMAL,
     );
     
-    // Fixed: use as_bool() instead of is_err()
     if !result.as_bool() {
         error!("Failed to draw cursor with GDI");
     }

@@ -332,7 +332,6 @@ impl RecorderInner {
         info!("Recording flag set to false");
 
         // Join all threads and handle any errors
-        // Updated to use RwLock instead of RefCell
         let mut handles = Vec::new();
         
         info!("Acquiring video thread handle");
@@ -405,7 +404,6 @@ impl RecorderInner {
     pub fn save_replay(&self, output_path: &str) -> std::result::Result<(), RecorderError> {
         info!("Saving replay buffer to {}", output_path);
         
-        // Updated to use RwLock instead of RefCell
         info!("Acquiring read lock for replay buffer");
         let replay_buffer = self.replay_buffer.read()
             .map_err(|_| RecorderError::Generic("Failed to acquire replay buffer lock".to_string()))?;

@@ -70,7 +70,7 @@ impl RecorderConfig {
         RecorderConfigBuilder::default()
     }
 
-    // Updated getter methods
+    // Getters
     pub fn fps_num(&self) -> u32 { self.fps_num }
     pub fn fps_den(&self) -> u32 { self.fps_den }
     pub fn input_width(&self) -> u32 { self.input_width }

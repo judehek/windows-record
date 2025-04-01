@@ -367,7 +367,6 @@ unsafe fn setup_audio_client(proc_id: u32, wave_format: &WAVEFORMATEX, audio_sou
     }
 }
 
-// Updated create_audio_sample to match microphone code's buffer handling
 unsafe fn create_audio_sample(
     buffer: *mut u8,
     num_frames: u32,
