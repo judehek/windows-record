@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicIsize, Ordering};
-use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
-use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextW, IsWindow, IsWindowVisible};
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextW, IsWindow, IsWindowVisible, GetWindowRect};
 use log::{debug, trace};
 
 /// Defines how window titles should be matched
@@ -92,6 +92,23 @@ pub fn get_window_title(hwnd: HWND) -> String {
         let mut text: [u16; 512] = [0; 512];
         let length = GetWindowTextW(hwnd, &mut text);
         String::from_utf16_lossy(&text[..length as usize])
+    }
+}
+
+/// Gets the window position and size
+pub fn get_window_rect(hwnd: HWND) -> Option<(i32, i32, u32, u32)> {
+    unsafe {
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).as_bool() {
+            let width = (rect.right - rect.left) as u32;
+            let height = (rect.bottom - rect.top) as u32;
+            debug!("Window rect: [{}, {}, {}, {}] - {}x{}", 
+                rect.left, rect.top, rect.right, rect.bottom, width, height);
+            Some((rect.left, rect.top, width, height))
+        } else {
+            debug!("Failed to get window rect for hwnd: {:?}", hwnd);
+            None
+        }
     }
 }
 

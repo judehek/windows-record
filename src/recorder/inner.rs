@@ -192,6 +192,8 @@ impl RecorderInner {
             info!("Audio channel created");
             let (sender_microphone, receiver_microphone) = channel::<SendableSample>();
             info!("Microphone channel created");
+            let (sender_window_info, receiver_window_info) = channel::<(Option<(i32, i32)>, Option<(u32, u32)>)>();
+            info!("Window info channel created");
 
             // Create D3D11 device and context
             info!("Creating D3D11 device and context");
@@ -232,6 +234,7 @@ impl RecorderInner {
                     context_mutex,
                     use_exact_match,
                     capture_cursor,
+                    sender_window_info,
                 );
                 info!("Video capture thread completed with result: {:?}", result.is_ok());
                 result
@@ -297,6 +300,7 @@ impl RecorderInner {
             info!("Starting sample processing thread");
             let rec_clone = recording.clone();
             let buffer_clone = replay_buffer.clone();
+            
             process_handle = Some(std::thread::spawn(move || {
                 info!("Processing thread started");
                 let result = process_samples(
@@ -304,6 +308,7 @@ impl RecorderInner {
                     receiver_video,
                     receiver_audio,
                     receiver_microphone,
+                    receiver_window_info,
                     rec_clone,
                     input_width,     // Capture dimensions
                     input_height,    // Capture dimensions

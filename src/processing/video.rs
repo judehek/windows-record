@@ -1,5 +1,6 @@
 use std::mem::ManuallyDrop;
-use log::{info, warn};
+use std::sync::{Arc, Mutex};
+use log::{info, warn, debug};
 use windows::core::{ComInterface, Result};
 use windows::Win32::Foundation::FALSE;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
@@ -12,6 +13,8 @@ pub unsafe fn setup_video_converter(
     input_height: u32,
     output_width: u32,
     output_height: u32,
+    window_position: Arc<Mutex<Option<(i32, i32)>>>,
+    window_size: Arc<Mutex<Option<(u32, u32)>>>,
 ) -> Result<IMFTransform> {
     // Create converter
     let converter: IMFTransform =
@@ -53,24 +56,67 @@ pub unsafe fn setup_video_converter(
     input_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, (input_width * 4) as u32)?;
     converter.SetInputType(0, &input_type, 0)?;
 
+    // Get MFT attributes for setting source/destination rectangles
+    let attributes = converter.GetAttributes()?;
+    
+    // Configure the converter to use source/destination rectangles based on window position and size
+    let window_pos_lock = window_position.lock().unwrap();
+    let window_size_lock = window_size.lock().unwrap();
+    
+    if let (Some((window_x, window_y)), Some((window_width, window_height))) = 
+       (*window_pos_lock, *window_size_lock) {
+        info!("Setting up converter with window info - position: [{}, {}], size: {}x{}", 
+               window_x, window_y, window_width, window_height);
+        
+        // Calculate the source rectangle within the captured screen
+        // (if the window is smaller than the captured area, we need to crop)
+        if window_width <= input_width && window_height <= input_height {
+            // MFVideoNormalizedRect has values from 0.0 to 1.0
+            let src_x = window_x as f32 / input_width as f32;
+            let src_y = window_y as f32 / input_height as f32;
+            let src_width = window_width as f32 / input_width as f32;
+            let src_height = window_height as f32 / input_height as f32;
+            
+            // Clamp values to ensure they're within the valid range
+            let src_x = src_x.max(0.0).min(1.0);
+            let src_y = src_y.max(0.0).min(1.0);
+            let src_right = (src_x + src_width).max(0.0).min(1.0);
+            let src_bottom = (src_y + src_height).max(0.0).min(1.0);
+            
+            let source_rect = MFVideoNormalizedRect {
+                left: src_x,
+                top: src_y,
+                right: src_right,
+                bottom: src_bottom,
+            };
+            
+            debug!("Setting source rect: left={}, top={}, right={}, bottom={}", 
+                  source_rect.left, source_rect.top, source_rect.right, source_rect.bottom);
+            
+            // Set the source rectangle on the converter - convert struct to bytes
+            let rect_bytes = unsafe { 
+                std::slice::from_raw_parts(
+                    &source_rect as *const MFVideoNormalizedRect as *const u8,
+                    std::mem::size_of::<MFVideoNormalizedRect>()
+                )
+            };
+            attributes.SetBlob(&MF_MT_GEOMETRIC_APERTURE, rect_bytes)?;
+        } else {
+            debug!("Window size exceeds input dimensions, using full input area");
+        }
+    } else {
+        debug!("No window position/size available, using default full frame");
+    }
+
     // Initialize the converter - only flush once at the beginning instead of each frame
     converter.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
     
     // Try enabling async mode
-    match converter.GetAttributes() {
-        Ok(attrs) => {
-            // Try to set async mode - this may fail if not supported
-            let result = attrs.SetUINT32(&MF_TRANSFORM_ASYNC, 1);
-            if result.is_ok() {
-                info!("Async processing enabled successfully");
-            } else {
-                info!("Transform doesn't support async processing");
-            }
-        },
-        Err(_) => {
-            // This transform doesn't support the attributes interface
-            warn!("Transform doesn't support attributes interface");
-        }
+    let result = attributes.SetUINT32(&MF_TRANSFORM_ASYNC, 1);
+    if result.is_ok() {
+        info!("Async processing enabled successfully");
+    } else {
+        info!("Transform doesn't support async processing");
     }
 
     Ok(converter)

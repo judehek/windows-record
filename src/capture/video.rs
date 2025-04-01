@@ -13,7 +13,7 @@ use windows::Win32::System::Threading::*;
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 use super::dxgi::{create_blank_dxgi_texture, setup_dxgi_duplication};
-use super::window::{is_window_valid, get_window_title};
+use super::window::{is_window_valid, get_window_title, get_window_rect};
 use crate::capture::dxgi::create_staging_texture;
 use crate::types::{SendableSample, TexturePool, SamplePool};
 
@@ -31,6 +31,14 @@ struct WindowTracker {
     ever_focused: bool,
     /// Whether to use exact matching
     use_exact_match: bool,
+    /// Window position (x, y)
+    position: Option<(i32, i32)>,
+    /// Window size (width, height)
+    size: Option<(u32, u32)>,
+    /// Last time we checked window rect
+    last_rect_check: Instant,
+    /// Time between window rect checks
+    rect_check_interval: Duration,
 }
 
 impl WindowTracker {
@@ -41,6 +49,13 @@ impl WindowTracker {
     
     /// Create a new window tracker with option for exact matching
     fn new_with_exact_match(hwnd: HWND, process_name: &str, use_exact_match: bool) -> Self {
+        // Try to get initial window rect
+        let (position, size) = if let Some((x, y, width, height)) = get_window_rect(hwnd) {
+            (Some((x, y)), Some((width, height)))
+        } else {
+            (None, None)
+        };
+        
         Self {
             hwnd,
             process_name: process_name.to_string(),
@@ -48,7 +63,38 @@ impl WindowTracker {
             check_interval: Duration::from_secs(2), // Check every 2 seconds
             ever_focused: false,
             use_exact_match,
+            position,
+            size,
+            last_rect_check: Instant::now(),
+            rect_check_interval: Duration::from_millis(500), // Check window rect every 500ms
         }
+    }
+    
+    /// Update the window position and size
+    fn update_window_rect(&mut self) {
+        let now = Instant::now();
+        
+        // Don't check too frequently
+        if now.duration_since(self.last_rect_check) < self.rect_check_interval {
+            return;
+        }
+        
+        self.last_rect_check = now;
+        
+        if let Some((x, y, width, height)) = get_window_rect(self.hwnd) {
+            self.position = Some((x, y));
+            self.size = Some((width, height));
+        }
+    }
+    
+    /// Get the current window position
+    fn get_position(&self) -> Option<(i32, i32)> {
+        self.position
+    }
+    
+    /// Get the current window size
+    fn get_size(&self) -> Option<(u32, u32)> {
+        self.size
     }
     
     /// Check if the window is currently in focus
@@ -141,6 +187,7 @@ pub unsafe fn get_frames(
     context_mutex: Arc<Mutex<ID3D11DeviceContext>>,
     use_exact_match: bool,
     capture_cursor: bool,
+    window_info_sender: Sender<(Option<(i32, i32)>, Option<(u32, u32)>)>,
 ) -> Result<()> {
     info!("Starting frame collection for window: '{}'", get_window_title(hwnd));
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
@@ -205,6 +252,18 @@ pub unsafe fn get_frames(
                 warn!("Window '{}' not found, will retry", process_name);
                 spin_sleep::sleep(Duration::from_millis(1));
                 continue;
+            }
+        }
+        
+        // Update window position and size and send the info
+        window_tracker.update_window_rect();
+        let position = window_tracker.get_position();
+        let size = window_tracker.get_size();
+        
+        // Only send window info if we have both position and size
+        if position.is_some() && size.is_some() {
+            if let Err(e) = window_info_sender.send((position, size)) {
+                warn!("Failed to send window position/size: {:?}", e);
             }
         }
         

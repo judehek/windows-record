@@ -6,7 +6,7 @@ use audio::AudioMixer;
 use log::{debug, error, info, trace};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use windows::core::Result;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 
@@ -17,6 +17,7 @@ pub fn process_samples(
     rec_video: Receiver<SendableSample>,
     rec_audio: Receiver<SendableSample>,
     rec_microphone: Receiver<SendableSample>,
+    rec_window_info: Receiver<(Option<(i32, i32)>, Option<(u32, u32)>)>,
     recording: Arc<AtomicBool>,
     input_width: u32,
     input_height: u32,
@@ -74,12 +75,46 @@ pub fn process_samples(
         None
     };
 
+    // Create a mutex to store current window position and size
+    let window_position = Arc::new(Mutex::new(None::<(i32, i32)>));
+    let window_size = Arc::new(Mutex::new(None::<(u32, u32)>));
+    
+    // Create a thread to handle window info updates
+    let window_position_clone = window_position.clone();
+    let window_size_clone = window_size.clone();
+    let recording_clone = recording.clone();
+    
+    std::thread::spawn(move || {
+        while recording_clone.load(Ordering::Relaxed) {
+            match rec_window_info.try_recv() {
+                Ok((pos, size)) => {
+                    if let Some(pos_value) = pos {
+                        *window_position_clone.lock().unwrap() = Some(pos_value);
+                    }
+                    if let Some(size_value) = size {
+                        *window_size_clone.lock().unwrap() = Some(size_value);
+                    }
+                }
+                Err(TryRecvError::Empty) => {
+                    // No new window info yet, wait a bit
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(TryRecvError::Disconnected) => {
+                    debug!("Window info channel disconnected");
+                    break;
+                }
+            }
+        }
+    });
+    
     let converter = unsafe { 
         video::setup_video_converter(
             input_width, 
             input_height, 
             output_width, 
-            output_height
+            output_height,
+            window_position.clone(),
+            window_size.clone()
         )
     }?;
     info!("Video processor transform created and configured");

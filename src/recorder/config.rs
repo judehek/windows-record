@@ -13,7 +13,7 @@ pub struct RecorderConfig {
     output_height: u32,
     video_bitrate: u32,
     video_encoder: VideoEncoderType,
-    video_encoder_name: Option<String>, // Add this new field for encoder name
+    video_encoder_name: Option<String>,
     capture_cursor: bool,
     
     // Audio settings
@@ -59,7 +59,7 @@ impl Default for RecorderConfig {
             system_volume: None,
             microphone_device: None,
             video_encoder: VideoEncoderType::default(),
-            video_encoder_name: None, // Initialize as None
+            video_encoder_name: None,
             enable_replay_buffer: false,
             replay_buffer_seconds: 30,
             capture_cursor: true,
@@ -85,7 +85,7 @@ impl RecorderConfig {
     pub fn debug_mode(&self) -> bool { self.debug_mode }
     pub fn video_bitrate(&self) -> u32 { self.video_bitrate }
     pub fn video_encoder(&self) -> &VideoEncoderType { &self.video_encoder }
-    pub fn video_encoder_name(&self) -> Option<&str> { self.video_encoder_name.as_deref() } // Add getter for encoder name
+    pub fn video_encoder_name(&self) -> Option<&str> { self.video_encoder_name.as_deref() }
     pub fn microphone_volume(&self) -> Option<f32> { self.microphone_volume }
     pub fn audio_source(&self) -> &AudioSource { &self.audio_source }
     pub fn system_volume(&self) -> Option<f32> { self.system_volume }
@@ -93,6 +93,7 @@ impl RecorderConfig {
     pub fn enable_replay_buffer(&self) -> bool { self.enable_replay_buffer }
     pub fn replay_buffer_seconds(&self) -> u32 { self.replay_buffer_seconds }
     pub fn capture_cursor(&self) -> bool { self.capture_cursor }
+    
 }
 
 #[derive(Default)]
@@ -122,6 +123,7 @@ impl RecorderConfigBuilder {
         self.config.output_height = height;
         self
     }
+    
 
     pub fn capture_audio(mut self, enabled: bool) -> Self {
         self.config.capture_audio = enabled;
@@ -173,7 +175,6 @@ impl RecorderConfigBuilder {
         self
     }
     
-    // Add a new builder method for video encoder name
     pub fn video_encoder_name<S: Into<String>>(mut self, name: S) -> Self {
         self.config.video_encoder_name = Some(name.into());
         self
