@@ -38,17 +38,42 @@ impl RecorderInner {
     pub fn init_with_exact_match(config: &RecorderConfig, process_name: &str, use_exact_match: bool) -> Result<Self> {
         info!("Initializing recorder for process: {} with exact match: {}", 
               process_name, use_exact_match);
+        // Find target window
+        info!("Finding target window with name: {} (exact match: {})", process_name, use_exact_match);
+        let hwnd = if use_exact_match {
+            info!("Using exact string matching for window");
+            get_window_by_exact_string(process_name)
+        } else {
+            info!("Using substring matching for window");
+            get_window_by_string(process_name)
+        }.ok_or_else(|| RecorderError::FailedToStart("No window found".to_string()))?;
+        info!("Found window with handle: {:?}", hwnd);
+
+        // Determine input resolution (auto-detect if not specified)
+        let (actual_input_width, actual_input_height) = match (config.input_width(), config.input_height()) {
+            (Some(width), Some(height)) => {
+                info!("Using user-specified input dimensions: {}x{}", width, height);
+                (width, height)
+            },
+            _ => {
+                info!("Input dimensions not specified, auto-detecting from monitor");
+                let (width, height) = crate::capture::get_window_monitor_resolution(hwnd);
+                info!("Auto-detected monitor resolution: {}x{}", width, height);
+                (width, height)
+            }
+        };
+        
         info!("Config details - fps: {}/{}, input: {}x{}, output: {}x{}, audio: {}, mic: {}",
               config.fps_num(), config.fps_den(),
-              config.input_width(), config.input_height(),
+              actual_input_width, actual_input_height,
               config.output_width(), config.output_height(),
               config.capture_audio(), config.capture_microphone());
 
         // Clone the necessary values from config at the start
         let fps_num = config.fps_num();
         let fps_den = config.fps_den();
-        let input_width = config.input_width();
-        let input_height = config.input_height();
+        let input_width = actual_input_width;
+        let input_height = actual_input_height;
         let output_width = config.output_width();
         let output_height = config.output_height();
         let capture_audio = config.capture_audio();
@@ -158,16 +183,7 @@ impl RecorderInner {
             )?;
             info!("Media sink writer created successfully");
 
-            // Find target window with exact match if specified
-            info!("Finding target window with name: {} (exact match: {})", process_name, use_exact_match);
-            let hwnd = if use_exact_match {
-                info!("Using exact string matching for window");
-                get_window_by_exact_string(process_name)
-            } else {
-                info!("Using substring matching for window");
-                get_window_by_string(process_name)
-            }.ok_or_else(|| RecorderError::FailedToStart("No window found".to_string()))?;
-            info!("Found window with handle: {:?}", hwnd);
+            // Window handle already found at the beginning
 
             // Get the process ID
             let mut process_id: u32 = 0;

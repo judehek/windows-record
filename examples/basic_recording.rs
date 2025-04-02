@@ -11,7 +11,7 @@ fn main() -> Result<()> {
     // Create recorder
     let config = Recorder::builder()
         .fps(30, 1)
-        .input_dimensions(1920, 1080)  
+        // Input dimensions will be auto-detected from monitor resolution
         .output_dimensions(1920, 1080)
         .capture_audio(true)
         .capture_microphone(true)

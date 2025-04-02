@@ -24,7 +24,7 @@ fn main() -> Result<()> {
     // Create recorder with builder pattern
     let config = Recorder::builder()
         .fps(30, 1)
-        .input_dimensions(1920, 1080)
+        // Input dimensions will be auto-detected from monitor resolution
         .output_dimensions(1920, 1080)
         .capture_audio(true)
         .output_path("output.mp4")
@@ -102,7 +102,7 @@ This will use all default settings and just specify the output file.
 
 ### Video Settings
 - `fps(num, den)` - Set frame rate (default: 30/1)
-- `input_dimensions(width, height)` - Set input resolution (default: 1920x1080)
+- `input_dimensions(width, height)` - Set input resolution (optional - auto-detects monitor resolution if not specified)
 - `output_dimensions(width, height)` - Set output resolution (default: 1920x1080)
 - `video_bitrate(bitrate)` - Set video bitrate in bits per second (default: 5,000,000)
 - `video_encoder(encoder)` - Set video encoder (default: H264, options: H264, HEVC)
