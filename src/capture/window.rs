@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicIsize, Ordering};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextW, IsWindow, IsWindowVisible, GetWindowRect};
-use log::{debug, trace};
+use log::{debug, info, trace, warn};
 
 /// Defines how window titles should be matched
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,11 +102,18 @@ pub fn get_window_rect(hwnd: HWND) -> Option<(i32, i32, u32, u32)> {
         if GetWindowRect(hwnd, &mut rect).as_bool() {
             let width = (rect.right - rect.left) as u32;
             let height = (rect.bottom - rect.top) as u32;
-            debug!("Window rect: [{}, {}, {}, {}] - {}x{}", 
-                rect.left, rect.top, rect.right, rect.bottom, width, height);
+            
+            // Get window title for better logging
+            let title = get_window_title(hwnd);
+            let title_str = if title.is_empty() { "<Unnamed>" } else { &title };
+            
+            info!("Window '{}' rect: [{}, {}, {}, {}] - {}x{}", 
+                title_str, rect.left, rect.top, rect.right, rect.bottom, width, height);
+                
             Some((rect.left, rect.top, width, height))
         } else {
-            debug!("Failed to get window rect for hwnd: {:?}", hwnd);
+            let error_code = windows::Win32::Foundation::GetLastError();
+            warn!("Failed to get window rect for hwnd: {:?}, error: {:?}", hwnd, error_code);
             None
         }
     }

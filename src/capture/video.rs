@@ -51,8 +51,11 @@ impl WindowTracker {
     fn new_with_exact_match(hwnd: HWND, process_name: &str, use_exact_match: bool) -> Self {
         // Try to get initial window rect
         let (position, size) = if let Some((x, y, width, height)) = get_window_rect(hwnd) {
+            info!("WindowTracker: Initial window rect for '{}' - Position: [{}, {}], Size: {}x{}", 
+                  process_name, x, y, width, height);
             (Some((x, y)), Some((width, height)))
         } else {
+            info!("WindowTracker: Failed to get initial window rect for '{}'", process_name);
             (None, None)
         };
         
@@ -82,18 +85,31 @@ impl WindowTracker {
         self.last_rect_check = now;
         
         if let Some((x, y, width, height)) = get_window_rect(self.hwnd) {
+            // Check if values have changed before logging
+            let position_changed = self.position != Some((x, y));
+            let size_changed = self.size != Some((width, height));
+            
+            if position_changed || size_changed {
+                info!("WindowTracker: Window '{}' updated - Position: [{}, {}], Size: {}x{}", 
+                      self.process_name, x, y, width, height);
+            }
+            
             self.position = Some((x, y));
             self.size = Some((width, height));
+        } else {
+            debug!("WindowTracker: Failed to get window rect for '{}'", self.process_name);
         }
     }
     
     /// Get the current window position
     fn get_position(&self) -> Option<(i32, i32)> {
+        trace!("WindowTracker: Getting position for '{}': {:?}", self.process_name, self.position);
         self.position
     }
     
     /// Get the current window size
     fn get_size(&self) -> Option<(u32, u32)> {
+        trace!("WindowTracker: Getting size for '{}': {:?}", self.process_name, self.size);
         self.size
     }
     
@@ -262,8 +278,17 @@ pub unsafe fn get_frames(
         
         // Only send window info if we have both position and size
         if position.is_some() && size.is_some() {
+            //info!("Capture: Sending window info for '{}' - Position: {:?}, Size: {:?}", 
+            //     process_name, position, size);
             if let Err(e) = window_info_sender.send((position, size)) {
                 warn!("Failed to send window position/size: {:?}", e);
+            }
+        } else {
+            if position.is_none() {
+                debug!("Capture: Window position is None for '{}'", process_name);
+            }
+            if size.is_none() {
+                debug!("Capture: Window size is None for '{}'", process_name);
             }
         }
         

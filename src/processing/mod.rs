@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use windows::core::Result;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 
-use crate::types::{SendableSample, SendableWriter, ReplayBuffer};
+use crate::types::{ReplayBuffer, SendableSample, SendableWriter};
 
 pub fn process_samples(
     writer: SendableWriter,
@@ -41,7 +41,7 @@ pub fn process_samples(
 
     // Calculate stream indices based on our new approach
     let video_stream_index = 0;
-    
+
     // Now we only have one audio stream index if either audio source is enabled
     let audio_stream_index = if capture_audio || capture_microphone {
         Some(1)
@@ -57,19 +57,19 @@ pub fn process_samples(
     // Create audio mixer if we need to mix audio
     let mut audio_mixer = if capture_audio || capture_microphone {
         let mut mixer = AudioMixer::new(44100, 16, 2, capture_audio && capture_microphone);
-        
+
         // Set the volume/gain levels from parameters, using default of 1.0 if None
         let sys_vol = system_volume.unwrap_or(1.0);
         let mic_vol = microphone_volume.unwrap_or(1.0);
-        
+
         mixer.set_system_volume(sys_vol);
         mixer.set_microphone_volume(mic_vol);
-        
+
         info!(
             "Audio mixer created with system gain: {:.2}, microphone gain: {:.2}",
             sys_vol, mic_vol
         );
-        
+
         Some(mixer)
     } else {
         None
@@ -78,20 +78,22 @@ pub fn process_samples(
     // Create a mutex to store current window position and size
     let window_position = Arc::new(Mutex::new(None::<(i32, i32)>));
     let window_size = Arc::new(Mutex::new(None::<(u32, u32)>));
-    
+
     // Create a thread to handle window info updates
     let window_position_clone = window_position.clone();
     let window_size_clone = window_size.clone();
     let recording_clone = recording.clone();
-    
+
     std::thread::spawn(move || {
         while recording_clone.load(Ordering::Relaxed) {
             match rec_window_info.try_recv() {
                 Ok((pos, size)) => {
                     if let Some(pos_value) = pos {
+                        //info!("Processing: Received window position: [{}, {}]", pos_value.0, pos_value.1);
                         *window_position_clone.lock().unwrap() = Some(pos_value);
                     }
                     if let Some(size_value) = size {
+                        //info!("Processing: Received window size: {}x{}", size_value.0, size_value.1);
                         *window_size_clone.lock().unwrap() = Some(size_value);
                     }
                 }
@@ -106,15 +108,15 @@ pub fn process_samples(
             }
         }
     });
-    
-    let converter = unsafe { 
+
+    let converter = unsafe {
         video::setup_video_converter(
-            input_width, 
-            input_height, 
-            output_width, 
+            input_width,
+            input_height,
+            output_width,
             output_height,
             window_position.clone(),
-            window_size.clone()
+            window_size.clone(),
         )
     }?;
     info!("Video processor transform created and configured");
@@ -134,15 +136,15 @@ pub fn process_samples(
                 had_work = true;
                 // Extract timestamp for the replay buffer
                 let timestamp: i64 = unsafe { samp.sample.GetSampleTime() }?;
-                
+
                 // Convert and write to file as usual
                 let converted = unsafe {
                     video::convert_bgra_to_nv12(
-                        &device, 
-                        &converter, 
-                        &*samp.sample, 
+                        &device,
+                        &converter,
+                        &*samp.sample,
                         output_width,
-                        output_height
+                        output_height,
                     )?
                 };
                 // Add to replay buffer if enabled
@@ -173,19 +175,20 @@ pub fn process_samples(
             match rec_audio.try_recv() {
                 Ok(audio_samp) => {
                     had_work = true;
-                    
+
                     // Extract timestamp for the replay buffer
                     let timestamp: i64 = unsafe { audio_samp.sample.GetSampleTime() }?;
-                    
+
                     // Only add to replay buffer if we're NOT mixing (otherwise we'll add the mixed sample later)
                     if audio_mixer.is_none() {
                         if let Some(buffer) = &replay_buffer {
                             // Clone the IMFSample from the Arc
                             let cloned_sample = audio_samp.sample.as_ref().clone();
-                            buffer.add_audio_sample(SendableSample::new(cloned_sample), timestamp)?;
+                            buffer
+                                .add_audio_sample(SendableSample::new(cloned_sample), timestamp)?;
                         }
                     }
-                    
+
                     if let Some(mixer) = &mut audio_mixer {
                         // Add to mixer if we need to mix
                         mixer.add_system_audio(audio_samp);
@@ -213,19 +216,20 @@ pub fn process_samples(
             match rec_microphone.try_recv() {
                 Ok(mic_samp) => {
                     had_work = true;
-                    
+
                     // Extract timestamp for the replay buffer
                     let timestamp: i64 = unsafe { mic_samp.sample.GetSampleTime() }?;
-                    
+
                     // Only add to replay buffer if we're NOT mixing
                     if audio_mixer.is_none() {
                         if let Some(buffer) = &replay_buffer {
                             // Clone the IMFSample from the Arc
                             let cloned_sample = mic_samp.sample.as_ref().clone();
-                            buffer.add_audio_sample(SendableSample::new(cloned_sample), timestamp)?;
+                            buffer
+                                .add_audio_sample(SendableSample::new(cloned_sample), timestamp)?;
                         }
                     }
-                    
+
                     // Rest remains the same
                     if let Some(mixer) = &mut audio_mixer {
                         mixer.add_microphone_audio(mic_samp);
@@ -253,24 +257,28 @@ pub fn process_samples(
                     match mixed_result {
                         Ok(mixed_sample) => {
                             let write_start = std::time::Instant::now();
-                            
+
                             // Add mixed sample to replay buffer with current timestamp
                             if let Some(buffer) = &replay_buffer {
                                 // Get timestamp from the sample if possible or use system time
-                                let timestamp = unsafe { 
+                                let timestamp = unsafe {
                                     mixed_sample.GetSampleTime().unwrap_or_else(|_| {
                                         // Fallback to system time if GetSampleTime fails
                                         std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
                                             .unwrap_or_default()
-                                            .as_nanos() as i64
+                                            .as_nanos()
+                                            as i64
                                     })
                                 };
                                 // Extract the IMFSample from the Arc
                                 let cloned_sample = mixed_sample.as_ref().clone();
-                                buffer.add_audio_sample(SendableSample::new(cloned_sample), timestamp)?;
+                                buffer.add_audio_sample(
+                                    SendableSample::new(cloned_sample),
+                                    timestamp,
+                                )?;
                             }
-                            
+
                             // Write the mixed sample
                             unsafe { writer.0.WriteSample(stream_index, &*mixed_sample)? };
                             trace!("Mixed audio sample written in {:?}", write_start.elapsed());
