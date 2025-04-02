@@ -206,7 +206,7 @@ pub unsafe fn update_video_converter(
         window_position, window_size
     );
 
-    // --- NEW: Get Video Processor Control Interface ---
+    // Video Processor Control Interface
     let video_control: Option<IMFVideoProcessorControl> = converter.cast().ok();
 
     if video_control.is_none() {

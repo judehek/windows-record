@@ -29,6 +29,8 @@ pub fn process_samples(
     system_volume: Option<f32>,
     microphone_volume: Option<f32>,
     replay_buffer: Option<Arc<ReplayBuffer>>,
+    initial_window_position: Option<(i32, i32)>,
+    initial_window_size: Option<(u32, u32)>,
 ) -> Result<()> {
     info!("Starting sample processing");
 
@@ -75,9 +77,11 @@ pub fn process_samples(
         None
     };
 
-    // Create a mutex to store current window position and size
-    let window_position = Arc::new(Mutex::new(None::<(i32, i32)>));
-    let window_size = Arc::new(Mutex::new(None::<(u32, u32)>));
+    // Create a mutex to store current window position and size with the initial values
+    info!("Initializing window position mutex with: {:?}", initial_window_position);
+    let window_position = Arc::new(Mutex::new(initial_window_position));
+    info!("Initializing window size mutex with: {:?}", initial_window_size);
+    let window_size = Arc::new(Mutex::new(initial_window_size));
 
     // Flag to track window changes
     let window_changed = Arc::new(AtomicBool::new(false));
