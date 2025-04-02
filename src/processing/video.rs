@@ -1,12 +1,71 @@
+use log::{debug, info, warn};
 use std::mem::ManuallyDrop;
 use std::sync::{Arc, Mutex};
-use log::{info, warn, debug};
 use windows::core::{ComInterface, Result};
-use windows::Win32::Foundation::FALSE;
+use windows::Win32::Foundation::{FALSE, RECT};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+
+// Create helper function for setting up source rectangle using IMFVideoProcessorControl
+// Renamed function to reflect the method used
+unsafe fn set_video_processor_source_rectangle(
+    control: &IMFVideoProcessorControl, // Takes the control interface
+    input_width: u32,
+    input_height: u32,
+    window_x: i32,
+    window_y: i32,
+    window_width: u32,
+    window_height: u32,
+) -> Result<bool> {
+    // Log the comparison values
+    info!("Window dimensions <= input dimensions, applying source rectangle");
+    info!(
+        "Comparing - window: {}x{}, input: {}x{}",
+        window_width, window_height, input_width, input_height
+    );
+
+    // Calculate the actual pixel values to use
+    let left = window_x;
+    let top = window_y;
+    // RECT uses right and bottom, not width and height directly
+    let right = window_x + window_width as i32;
+    let bottom = window_y + window_height as i32;
+
+    // Clamp values just in case
+    let final_left = left.max(0);
+    let final_top = top.max(0);
+    let final_right = right.min(input_width as i32);
+    let final_bottom = bottom.min(input_height as i32);
+
+    // Create RECT structure
+    let source_rect = RECT {
+        left: final_left,
+        top: final_top,
+        right: final_right,
+        bottom: final_bottom,
+    };
+
+    info!(
+        "Setting source rect via IMFVideoProcessorControl: left={}, top={}, right={}, bottom={}",
+        source_rect.left, source_rect.top, source_rect.right, source_rect.bottom
+    );
+
+    match control.SetSourceRectangle(Some(&source_rect)) {
+        Ok(_) => {
+            info!("Successfully set source rectangle via IMFVideoProcessorControl");
+            Ok(true)
+        }
+        Err(e) => {
+            warn!(
+                "Failed to set source rectangle via IMFVideoProcessorControl: {:?}",
+                e
+            );
+            Ok(false) // Return false on failure, no error propogation
+        }
+    }
+}
 
 pub unsafe fn setup_video_converter(
     input_width: u32,
@@ -20,7 +79,6 @@ pub unsafe fn setup_video_converter(
     let converter: IMFTransform =
         CoCreateInstance(&CLSID_VideoProcessorMFT, None, CLSCTX_INPROC_SERVER)?;
 
-    // Helper function to set common attributes
     fn set_common_attributes(media_type: &IMFMediaType, is_progressive: bool) -> Result<()> {
         unsafe {
             let interlace_mode = if is_progressive {
@@ -28,129 +86,102 @@ pub unsafe fn setup_video_converter(
             } else {
                 MFVideoInterlace_MixedInterlaceOrProgressive.0
             };
-            
-            media_type.SetUINT32(
-                &MF_MT_INTERLACE_MODE,
-                interlace_mode.try_into().unwrap(),
-            )?;
+
+            media_type.SetUINT32(&MF_MT_INTERLACE_MODE, interlace_mode.try_into().unwrap())?;
             media_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1 << 32) | 1)?;
         }
         Ok(())
     }
-
     // Set output type first (REQUIRED)
     let output_type: IMFMediaType = MFCreateMediaType()?;
     output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
     output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
     set_common_attributes(&output_type, true)?;
-    output_type.SetUINT64(&MF_MT_FRAME_SIZE, ((output_width as u64) << 32) | (output_height as u64))?;
+    output_type.SetUINT64(
+        &MF_MT_FRAME_SIZE,
+        ((output_width as u64) << 32) | (output_height as u64),
+    )?;
     output_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, output_width as u32)?;
     converter.SetOutputType(0, &output_type, 0)?;
-    
+
     // Set input media type (BGRA)
     let input_type: IMFMediaType = MFCreateMediaType()?;
     input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
     input_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_ARGB32)?;
     set_common_attributes(&input_type, true)?;
-    input_type.SetUINT64(&MF_MT_FRAME_SIZE, ((input_width as u64) << 32) | (input_height as u64))?;
+    input_type.SetUINT64(
+        &MF_MT_FRAME_SIZE,
+        ((input_width as u64) << 32) | (input_height as u64),
+    )?;
     input_type.SetUINT32(&MF_MT_DEFAULT_STRIDE, (input_width * 4) as u32)?;
     converter.SetInputType(0, &input_type, 0)?;
 
-    // Get MFT attributes for setting source/destination rectangles
+    // Video Processor Control Interface
+    let video_control: Option<IMFVideoProcessorControl> = converter.cast().ok();
+    // Keep attributes for other settings like Async
     let attributes = converter.GetAttributes()?;
-    
+
     // Configure the converter to use source/destination rectangles based on window position and size
     let window_pos_lock = window_position.lock().unwrap();
     let window_size_lock = window_size.lock().unwrap();
-    
-    // Log initial values of input, output dimensions
-    info!("Video converter setup: input: {}x{}, output: {}x{}", 
-    input_width, input_height, output_width, output_height);
 
-    info!("Video converter setup: Window position: {:?}, Window size: {:?}", 
-    *window_pos_lock, *window_size_lock);
+    info!(
+        "Video converter setup: input: {}x{}, output: {}x{}",
+        input_width, input_height, output_width, output_height
+    );
 
-    if let (Some((window_x, window_y)), Some((window_width, window_height))) = 
-        (*window_pos_lock, *window_size_lock) {
-        info!("Setting up converter with window info - position: [{}, {}], size: {}x{}", 
-            window_x, window_y, window_width, window_height);
+    info!(
+        "Video converter setup: Window position: {:?}, Window size: {:?}",
+        *window_pos_lock, *window_size_lock
+    );
 
-        // Calculate the source rectangle within the captured screen
-        // (if the window is smaller than the captured area, we need to crop)
+    if let (Some((window_x, window_y)), Some((window_width, window_height))) =
+        (*window_pos_lock, *window_size_lock)
+    {
+        info!(
+            "Setting up converter with initial window info - position: [{}, {}], size: {}x{}",
+            window_x, window_y, window_width, window_height
+        );
+
         if window_width <= input_width && window_height <= input_height {
-        // Log the comparison values
-        info!("Window dimensions <= input dimensions, applying source rectangle");
-        info!("Comparing - window: {}x{}, input: {}x{}", 
+            // Use the correct interface if available
+            if let Some(ref control) = video_control {
+                set_video_processor_source_rectangle(
+                    control,
+                    input_width,
+                    input_height,
+                    window_x,
+                    window_y,
+                    window_width,
+                    window_height,
+                )?;
+            } else {
+                warn!("IMFVideoProcessorControl interface not found on the MFT. Cannot set source rectangle.");
+            }
+        } else {
+            info!("Initial window size exceeds input dimensions - window: {}x{}, input: {}x{}, using full input area",
                 window_width, window_height, input_width, input_height);
-        
-        // MFVideoNormalizedRect has values from 0.0 to 1.0
-        let src_x = window_x as f32 / input_width as f32;
-        let src_y = window_y as f32 / input_height as f32;
-        let src_width = window_width as f32 / input_width as f32;
-        let src_height = window_height as f32 / input_height as f32;
-        
-        // Log pre-clamped values
-        info!("Pre-clamped normalized values - x: {}, y: {}, width: {}, height: {}", 
-                src_x, src_y, src_width, src_height);
-        
-        // Clamp values to ensure they're within the valid range
-        let src_x = src_x.max(0.0).min(1.0);
-        let src_y = src_y.max(0.0).min(1.0);
-        let src_right = (src_x + src_width).max(0.0).min(1.0);
-        let src_bottom = (src_y + src_height).max(0.0).min(1.0);
-        
-        // Log if any clamping was applied
-        if src_x != window_x as f32 / input_width as f32 ||
-            src_y != window_y as f32 / input_height as f32 ||
-            src_right != src_x + src_width ||
-            src_bottom != src_y + src_height {
-            info!("Clamping was applied to source rectangle values");
-            info!("Original src_right would be: {}, src_bottom would be: {}", 
-                    src_x + src_width, src_y + src_height);
-        }
-        
-        let source_rect = MFVideoNormalizedRect {
-            left: src_x,
-            top: src_y,
-            right: src_right,
-            bottom: src_bottom,
-        };
-        
-        info!("Setting source rect: left={}, top={}, right={}, bottom={}", 
-                source_rect.left, source_rect.top, source_rect.right, source_rect.bottom);
-        
-        // Calculate the actual pixel dimensions this represents
-        let pixel_x = (src_x * input_width as f32) as i32;
-        let pixel_y = (src_y * input_height as f32) as i32;
-        let pixel_width = ((src_right - src_x) * input_width as f32) as u32;
-        let pixel_height = ((src_bottom - src_y) * input_height as f32) as u32;
-        info!("Source rect in pixels: x={}, y={}, width={}, height={}", 
-                pixel_x, pixel_y, pixel_width, pixel_height);
-        
-        // Set the source rectangle on the converter - convert struct to bytes
-        let rect_bytes = unsafe { 
-            std::slice::from_raw_parts(
-                &source_rect as *const MFVideoNormalizedRect as *const u8,
-                std::mem::size_of::<MFVideoNormalizedRect>()
-            )
-        };
-        
-        info!("Setting geometric aperture attribute with {} bytes", rect_bytes.len());
-        match attributes.SetBlob(&MF_MT_GEOMETRIC_APERTURE, rect_bytes) {
-            Ok(_) => info!("Successfully set geometric aperture"),
-            Err(e) => info!("Failed to set geometric aperture: {:?}", e),
+            // Optionally reset source rect to full frame
+            // if let Some(ref control) = video_control {
+            //    let full_rect = RECT { left: 0, top: 0, right: input_width as i32, bottom: input_height as i32 };
+            //    control.SetSourceRectangle(0, &full_rect)?;
+            // }
         }
     } else {
-        info!("Window size exceeds input dimensions - window: {}x{}, input: {}x{}, using full input area", 
-            window_width, window_height, input_width, input_height);
-    }
-    } else {
-        info!("No window position/size available, using default full frame");
+        info!("No window position/size available at setup, using default full frame");
+        // Optionally set source rect to full frame explicitly
+        // if let Some(ref control) = video_control {
+        //     let full_rect = RECT { left: 0, top: 0, right: input_width as i32, bottom: input_height as i32 };
+        //     control.SetSourceRectangle(0, &full_rect)?;
+        // }
     }
 
     // Initialize the converter - only flush once at the beginning instead of each frame
+    // MFT_MESSAGE_NOTIFY_BEGIN_STREAMING might be better
     converter.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
-    
+    //converter.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
+    //converter.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
+
     // Try enabling async mode
     let result = attributes.SetUINT32(&MF_TRANSFORM_ASYNC, 1);
     if result.is_ok() {
@@ -160,6 +191,66 @@ pub unsafe fn setup_video_converter(
     }
 
     Ok(converter)
+}
+
+/// Updates the video converter with new window position and size
+pub unsafe fn update_video_converter(
+    converter: &IMFTransform,
+    input_width: u32,
+    input_height: u32,
+    window_position: Option<(i32, i32)>,
+    window_size: Option<(u32, u32)>,
+) -> Result<bool> {
+    info!(
+        "Updating video converter with new window info - Position: {:?}, Size: {:?}",
+        window_position, window_size
+    );
+
+    // --- NEW: Get Video Processor Control Interface ---
+    let video_control: Option<IMFVideoProcessorControl> = converter.cast().ok();
+
+    if video_control.is_none() {
+        warn!("IMFVideoProcessorControl interface not found on the MFT during update. Cannot set source rectangle.");
+        return Ok(false); // Cannot perform the update
+    }
+    let control = video_control.unwrap();
+
+    // Only update if we have both position and size
+    if let (Some((window_x, window_y)), Some((window_width, window_height))) =
+        (window_position, window_size)
+    {
+        // If the window is smaller than the captured area, we need to crop
+        if window_width <= input_width && window_height <= input_height {
+            return set_video_processor_source_rectangle(
+                &control, // Pass the control interface
+                input_width,
+                input_height,
+                window_x,
+                window_y,
+                window_width,
+                window_height,
+            );
+        } else {
+            info!("Window size exceeds input dimensions, using full input area");
+            // Reset to full frame if necessary
+            let full_rect = RECT {
+                left: 0,
+                top: 0,
+                right: input_width as i32,
+                bottom: input_height as i32,
+            };
+
+            match control.SetSourceRectangle(Some(&full_rect)) {
+                Ok(_) => info!("Reset source rectangle to full input frame."),
+                Err(e) => warn!("Failed to reset source rectangle: {:?}", e),
+            }
+            return Ok(true); // Indicate that *some* change was attempted/made (resetting)
+        }
+    } else {
+        info!("Cannot update converter: Missing window position or size");
+    }
+
+    Ok(false) // Indicate no change was made
 }
 
 pub unsafe fn convert_bgra_to_nv12(
@@ -175,49 +266,75 @@ pub unsafe fn convert_bgra_to_nv12(
     // Create NV12 texture and output sample
     let (nv12_texture, output_sample) = create_nv12_output(device, output_width, output_height)?;
 
-    // Process the frame - removed unnecessary flush between frames
+    // Process the frame
     converter.ProcessInput(0, sample, 0)?;
 
-    let mut output = MFT_OUTPUT_DATA_BUFFER {
-        pSample: ManuallyDrop::new(Some(output_sample)),
+    let mut output_data_buffer = MFT_OUTPUT_DATA_BUFFER {
+        pSample: ManuallyDrop::new(Some(output_sample)), // Pass ownership
         dwStatus: 0,
         pEvents: ManuallyDrop::new(None),
         dwStreamID: 0,
     };
 
-    let output_slice = std::slice::from_mut(&mut output);
-    let mut status: u32 = 0;
+    // Get a mutable slice reference to the MFT_OUTPUT_DATA_BUFFER
+    let output_buffers = std::slice::from_mut(&mut output_data_buffer);
+    let mut status: u32 = 0; // MFT_PROCESS_OUTPUT_STATUS
 
-    let result = converter.ProcessOutput(0, output_slice, &mut status);
-    
-    // Extract the sample before any error handling to ensure proper resource cleanup
-    let final_sample = if result.is_ok() {
-        ManuallyDrop::drop(&mut output_slice[0].pEvents);
-        ManuallyDrop::take(&mut output_slice[0].pSample)
-            .ok_or(windows::core::Error::from_win32())?
-    } else {
-        // Clean up resources
-        if let Some(sample) = ManuallyDrop::take(&mut output_slice[0].pSample) {
-            drop(sample);
+    // ProcessOutput
+    // Needs pointer to MFT_OUTPUT_DATA_BUFFER array, pointer to status
+    let result = converter.ProcessOutput(0, output_buffers, &mut status);
+
+    // Correctly retrieve the sample or handle error
+    let final_sample = match result {
+        Ok(_) => {
+            // Success, take the sample back from ManuallyDrop
+            ManuallyDrop::drop(&mut output_buffers[0].pEvents); // Drop events if any
+            ManuallyDrop::take(&mut output_buffers[0].pSample).ok_or_else(|| {
+                windows::core::Error::new(
+                    MF_E_TRANSFORM_NEED_MORE_INPUT,
+                    "ProcessOutput succeeded but sample was None".into(),
+                )
+            })? // Should not happen if Ok
         }
-        ManuallyDrop::drop(&mut output_slice[0].pEvents);
-        drop(nv12_texture);
-        
-        // Check for device removal
-        device.GetDeviceRemovedReason()?;
-        return Err(result.unwrap_err());
+        Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
+            // This is expected if the MFT needs more input before producing output
+            debug!("ProcessOutput returned MF_E_TRANSFORM_NEED_MORE_INPUT");
+            // Clean up the sample we allocated, as it wasn't used
+            if let Some(s) = ManuallyDrop::take(&mut output_buffers[0].pSample) {
+                drop(s);
+            }
+            ManuallyDrop::drop(&mut output_buffers[0].pEvents);
+            drop(nv12_texture); // Also drop the texture
+            return Err(e); // Propagate the error code
+        }
+        Err(e) => {
+            // Other errors
+            warn!("ProcessOutput failed: {:?}", e);
+            // Clean up the allocated sample and texture
+            if let Some(s) = ManuallyDrop::take(&mut output_buffers[0].pSample) {
+                drop(s);
+            }
+            ManuallyDrop::drop(&mut output_buffers[0].pEvents);
+            drop(nv12_texture); // Also drop the texture
+
+            // Check for device removal
+            device.GetDeviceRemovedReason()?; // This will return the error if device removed
+            return Err(e); // Propagate the original error
+        }
     };
-    
-    // Make sure to copy the timestamp and duration from the input sample to the output sample
+
+    // Copy timestamp and duration
     final_sample.SetSampleTime(time)?;
     final_sample.SetSampleDuration(duration)?;
-    
-    // Release the texture as it's no longer needed
+
+    // Release the texture explicitly as the sample holds a ref via the buffer
+    // We don't need our original handle to it anymore.
     drop(nv12_texture);
 
     Ok(final_sample)
 }
 
+// --- create_nv12_output remains unchanged ---
 unsafe fn create_nv12_output(
     device: &ID3D11Device,
     output_width: u32,
@@ -240,7 +357,7 @@ unsafe fn create_nv12_output(
         Usage: D3D11_USAGE_DEFAULT,
         BindFlags: D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
         CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(0),
-        MiscFlags: D3D11_RESOURCE_MISC_FLAG(0),
+        MiscFlags: D3D11_RESOURCE_MISC_FLAG(0), // No flags needed generally
     };
 
     let mut nv12_texture = None;
@@ -250,111 +367,35 @@ unsafe fn create_nv12_output(
     // Create output sample
     let output_sample: IMFSample = MFCreateSample()?;
 
+    // Cast the texture to IDXGISurface
     let nv12_surface: IDXGISurface = nv12_texture.cast()?;
-    
+
+    // Create a buffer from the DXGI surface
+    // MFCreateDXGISurfaceBuffer takes REFIID, IUnknown*, UINT, BOOL
     let output_buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &nv12_surface, 0, FALSE)?;
 
-    // Add the buffer to the sample
+    // Add the buffer to the sample. The sample now holds a reference to the buffer (and thus the surface/texture)
     output_sample.AddBuffer(&output_buffer)?;
-    
-    // Explicitly release the surface reference after adding the buffer
+
+    // Explicitly release the surface and buffer references obtained here,
+    // as the sample holds its own reference now.
+    // Using `drop` is the idiomatic Rust way.
     drop(nv12_surface);
     drop(output_buffer);
 
-    Ok((nv12_texture, output_sample))
+    Ok((nv12_texture, output_sample)) // Return the texture handle too, might be useful elsewhere temporarily
 }
 
-/// Updates the video converter with new window position and size
-pub unsafe fn update_video_converter(
-    converter: &IMFTransform,
-    input_width: u32,
-    input_height: u32,
-    window_position: Option<(i32, i32)>,
-    window_size: Option<(u32, u32)>
-) -> Result<bool> {
-    info!("Updating video converter with new window info - Position: {:?}, Size: {:?}", 
-         window_position, window_size);
-    
-    // Get converter attributes
-    let attributes = converter.GetAttributes()?;
-    
-    // Only update if we have both position and size
-    if let (Some((window_x, window_y)), Some((window_width, window_height))) = 
-       (window_position, window_size) {
-        
-        // Calculate the source rectangle within the captured screen
-        // (if the window is smaller than the captured area, we need to crop)
-        if window_width <= input_width && window_height <= input_height {
-            info!("Window dimensions <= input dimensions, updating source rectangle");
-            info!("Comparing - window: {}x{}, input: {}x{}", 
-                  window_width, window_height, input_width, input_height);
-            
-            // MFVideoNormalizedRect has values from 0.0 to 1.0
-            let src_x = window_x as f32 / input_width as f32;
-            let src_y = window_y as f32 / input_height as f32;
-            let src_width = window_width as f32 / input_width as f32;
-            let src_height = window_height as f32 / input_height as f32;
-            
-            // Log pre-clamped values
-            info!("Pre-clamped normalized values - x: {}, y: {}, width: {}, height: {}", 
-                  src_x, src_y, src_width, src_height);
-            
-            // Clamp values to ensure they're within the valid range
-            let src_x = src_x.max(0.0).min(1.0);
-            let src_y = src_y.max(0.0).min(1.0);
-            let src_right = (src_x + src_width).max(0.0).min(1.0);
-            let src_bottom = (src_y + src_height).max(0.0).min(1.0);
-            
-            let source_rect = MFVideoNormalizedRect {
-                left: src_x,
-                top: src_y,
-                right: src_right,
-                bottom: src_bottom,
-            };
-            
-            info!("Updating source rect: left={:.4}, top={:.4}, right={:.4}, bottom={:.4}", 
-                  source_rect.left, source_rect.top, source_rect.right, source_rect.bottom);
-            
-            // Calculate the actual pixel dimensions this represents
-            let pixel_x = (src_x * input_width as f32) as i32;
-            let pixel_y = (src_y * input_height as f32) as i32;
-            let pixel_width = ((src_right - src_x) * input_width as f32) as u32;
-            let pixel_height = ((src_bottom - src_y) * input_height as f32) as u32;
-            info!("Updated source rect in pixels: x={}, y={}, width={}, height={}", 
-                  pixel_x, pixel_y, pixel_width, pixel_height);
-            
-            // Flush the converter before updating settings
-            converter.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
-            
-            // Set the source rectangle on the converter - convert struct to bytes
-            let rect_bytes = std::slice::from_raw_parts(
-                &source_rect as *const MFVideoNormalizedRect as *const u8,
-                std::mem::size_of::<MFVideoNormalizedRect>()
-            );
-            
-            // Update the geometric aperture
-            match attributes.SetBlob(&MF_MT_GEOMETRIC_APERTURE, rect_bytes) {
-                Ok(_) => info!("Successfully updated geometric aperture"),
-                Err(e) => {
-                    warn!("Failed to update geometric aperture: {:?}", e);
-                    return Ok(false);
-                }
-            }
-            
-            return Ok(true);
-        } else {
-            info!("Window size exceeds input dimensions, using full input area");
-        }
-    } else {
-        info!("Cannot update converter: Missing window position or size");
-    }
-    
-    Ok(false)
-}
-
-// Helper function to flush the converter when changing formats or at stream boundaries
+// --- flush_converter remains unchanged ---
 pub unsafe fn flush_converter(converter: &IMFTransform) -> Result<()> {
+    info!("Flushing video converter");
+    // Send flush command
     converter.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
-    converter.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
+    // After flush, MFT might require specific commands before processing again,
+    // like NOTIFY_BEGIN_STREAMING or NOTIFY_START_OF_STREAM.
+    // Drain is usually for signaling end-of-stream, not typically needed after flush.
+    // Let's remove drain unless specifically needed.
+    // converter.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
+    info!("Video converter flushed");
     Ok(())
 }
