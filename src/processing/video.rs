@@ -264,6 +264,94 @@ unsafe fn create_nv12_output(
     Ok((nv12_texture, output_sample))
 }
 
+/// Updates the video converter with new window position and size
+pub unsafe fn update_video_converter(
+    converter: &IMFTransform,
+    input_width: u32,
+    input_height: u32,
+    window_position: Option<(i32, i32)>,
+    window_size: Option<(u32, u32)>
+) -> Result<bool> {
+    info!("Updating video converter with new window info - Position: {:?}, Size: {:?}", 
+         window_position, window_size);
+    
+    // Get converter attributes
+    let attributes = converter.GetAttributes()?;
+    
+    // Only update if we have both position and size
+    if let (Some((window_x, window_y)), Some((window_width, window_height))) = 
+       (window_position, window_size) {
+        
+        // Calculate the source rectangle within the captured screen
+        // (if the window is smaller than the captured area, we need to crop)
+        if window_width <= input_width && window_height <= input_height {
+            info!("Window dimensions <= input dimensions, updating source rectangle");
+            info!("Comparing - window: {}x{}, input: {}x{}", 
+                  window_width, window_height, input_width, input_height);
+            
+            // MFVideoNormalizedRect has values from 0.0 to 1.0
+            let src_x = window_x as f32 / input_width as f32;
+            let src_y = window_y as f32 / input_height as f32;
+            let src_width = window_width as f32 / input_width as f32;
+            let src_height = window_height as f32 / input_height as f32;
+            
+            // Log pre-clamped values
+            info!("Pre-clamped normalized values - x: {}, y: {}, width: {}, height: {}", 
+                  src_x, src_y, src_width, src_height);
+            
+            // Clamp values to ensure they're within the valid range
+            let src_x = src_x.max(0.0).min(1.0);
+            let src_y = src_y.max(0.0).min(1.0);
+            let src_right = (src_x + src_width).max(0.0).min(1.0);
+            let src_bottom = (src_y + src_height).max(0.0).min(1.0);
+            
+            let source_rect = MFVideoNormalizedRect {
+                left: src_x,
+                top: src_y,
+                right: src_right,
+                bottom: src_bottom,
+            };
+            
+            info!("Updating source rect: left={:.4}, top={:.4}, right={:.4}, bottom={:.4}", 
+                  source_rect.left, source_rect.top, source_rect.right, source_rect.bottom);
+            
+            // Calculate the actual pixel dimensions this represents
+            let pixel_x = (src_x * input_width as f32) as i32;
+            let pixel_y = (src_y * input_height as f32) as i32;
+            let pixel_width = ((src_right - src_x) * input_width as f32) as u32;
+            let pixel_height = ((src_bottom - src_y) * input_height as f32) as u32;
+            info!("Updated source rect in pixels: x={}, y={}, width={}, height={}", 
+                  pixel_x, pixel_y, pixel_width, pixel_height);
+            
+            // Flush the converter before updating settings
+            converter.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
+            
+            // Set the source rectangle on the converter - convert struct to bytes
+            let rect_bytes = std::slice::from_raw_parts(
+                &source_rect as *const MFVideoNormalizedRect as *const u8,
+                std::mem::size_of::<MFVideoNormalizedRect>()
+            );
+            
+            // Update the geometric aperture
+            match attributes.SetBlob(&MF_MT_GEOMETRIC_APERTURE, rect_bytes) {
+                Ok(_) => info!("Successfully updated geometric aperture"),
+                Err(e) => {
+                    warn!("Failed to update geometric aperture: {:?}", e);
+                    return Ok(false);
+                }
+            }
+            
+            return Ok(true);
+        } else {
+            info!("Window size exceeds input dimensions, using full input area");
+        }
+    } else {
+        info!("Cannot update converter: Missing window position or size");
+    }
+    
+    Ok(false)
+}
+
 // Helper function to flush the converter when changing formats or at stream boundaries
 pub unsafe fn flush_converter(converter: &IMFTransform) -> Result<()> {
     converter.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;

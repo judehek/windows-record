@@ -3,7 +3,7 @@ pub mod media;
 pub mod video;
 
 use audio::AudioMixer;
-use log::{debug, error, info, trace};
+use log::{debug, error, info, trace, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -79,22 +79,53 @@ pub fn process_samples(
     let window_position = Arc::new(Mutex::new(None::<(i32, i32)>));
     let window_size = Arc::new(Mutex::new(None::<(u32, u32)>));
 
+    // Flag to track window changes
+    let window_changed = Arc::new(AtomicBool::new(false));
+    let window_changed_clone = window_changed.clone();
+
     // Create a thread to handle window info updates
     let window_position_clone = window_position.clone();
     let window_size_clone = window_size.clone();
     let recording_clone = recording.clone();
 
     std::thread::spawn(move || {
+        info!("Window info monitoring thread started");
         while recording_clone.load(Ordering::Relaxed) {
             match rec_window_info.try_recv() {
                 Ok((pos, size)) => {
+                    let mut position_changed = false;
+                    let mut size_changed = false;
+
+                    // Update window position if received
                     if let Some(pos_value) = pos {
-                        //info!("Processing: Received window position: [{}, {}]", pos_value.0, pos_value.1);
-                        *window_position_clone.lock().unwrap() = Some(pos_value);
+                        let mut lock = window_position_clone.lock().unwrap();
+                        position_changed = *lock != Some(pos_value);
+                        if position_changed {
+                            info!(
+                                "Processing: Window position changed to: [{}, {}]",
+                                pos_value.0, pos_value.1
+                            );
+                            *lock = Some(pos_value);
+                        }
                     }
+
+                    // Update window size if received
                     if let Some(size_value) = size {
-                        //info!("Processing: Received window size: {}x{}", size_value.0, size_value.1);
-                        *window_size_clone.lock().unwrap() = Some(size_value);
+                        let mut lock = window_size_clone.lock().unwrap();
+                        size_changed = *lock != Some(size_value);
+                        if size_changed {
+                            info!(
+                                "Processing: Window size changed to: {}x{}",
+                                size_value.0, size_value.1
+                            );
+                            *lock = Some(size_value);
+                        }
+                    }
+
+                    // If either position or size changed, mark for converter update
+                    if position_changed || size_changed {
+                        info!("Processing: Window position or size changed, marking for converter update");
+                        window_changed_clone.store(true, Ordering::SeqCst);
                     }
                 }
                 Err(TryRecvError::Empty) => {
@@ -107,6 +138,7 @@ pub fn process_samples(
                 }
             }
         }
+        info!("Window info monitoring thread finished");
     });
 
     let converter = unsafe {
@@ -127,8 +159,36 @@ pub fn process_samples(
     let mut microphone_disconnected = false;
     let mut audio_disconnected = false;
 
+    // Timestamp to track when we last checked for window changes
+    let mut last_window_check = std::time::Instant::now();
+    let window_check_interval = std::time::Duration::from_millis(500); // Check every 500ms
+
     while recording.load(Ordering::Relaxed) {
         let mut had_work = false;
+
+        // Check if window has changed and update converter if needed
+        let now = std::time::Instant::now();
+        if now.duration_since(last_window_check) >= window_check_interval {
+            last_window_check = now;
+
+            if window_changed.swap(false, Ordering::SeqCst) {
+                info!("Main thread: Detected window change, updating video converter");
+                let current_pos = *window_position.lock().unwrap();
+                let current_size = *window_size.lock().unwrap();
+
+                unsafe {
+                    if let Err(e) = video::update_video_converter(
+                        &converter,
+                        input_width,
+                        input_height,
+                        current_pos,
+                        current_size,
+                    ) {
+                        warn!("Failed to update video converter: {:?}", e);
+                    }
+                }
+            }
+        }
 
         // Process video samples - video is required
         match rec_video.try_recv() {
