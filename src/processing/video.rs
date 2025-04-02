@@ -222,7 +222,7 @@ pub unsafe fn update_video_converter(
         // If the window is smaller than the captured area, we need to crop
         if window_width <= input_width && window_height <= input_height {
             return set_video_processor_source_rectangle(
-                &control, // Pass the control interface
+                &control,
                 input_width,
                 input_height,
                 window_x,
@@ -244,7 +244,7 @@ pub unsafe fn update_video_converter(
                 Ok(_) => info!("Reset source rectangle to full input frame."),
                 Err(e) => warn!("Failed to reset source rectangle: {:?}", e),
             }
-            return Ok(true); // Indicate that *some* change was attempted/made (resetting)
+            return Ok(true); // Indicate that any change was attempted/made (resetting)
         }
     } else {
         info!("Cannot update converter: Missing window position or size");
