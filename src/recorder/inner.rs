@@ -402,6 +402,20 @@ impl RecorderInner {
             let initial_pos = initial_window_position;
             let initial_size = initial_window_size;
 
+            // Create the texture pool for processing using the same dimensions as the capture
+            info!("Creating texture pool for video processing");
+            let processing_texture_pool = crate::types::TexturePool::new(
+                device.clone(),
+                5, // Fewer acquisition textures needed for processing
+                input_width,
+                input_height,
+                windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
+            )?;
+            let processing_texture_pool = Arc::new(processing_texture_pool);
+            info!("Created texture pool for video processing");
+            
+            let processing_texture_pool_clone = processing_texture_pool.clone();
+            
             process_handle = Some(std::thread::spawn(move || {
                 info!("Processing thread started");
                 let result = process_samples(
@@ -423,6 +437,7 @@ impl RecorderInner {
                     buffer_clone,
                     initial_pos,  // Initial window position
                     initial_size, // Initial window size
+                    processing_texture_pool_clone, // Texture pool for processing
                 );
                 info!(
                     "Processing thread completed with result: {:?}",

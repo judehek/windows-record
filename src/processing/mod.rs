@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use windows::core::Result;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 
-use crate::types::{ReplayBuffer, SendableSample, SendableWriter};
+use crate::types::{ReplayBuffer, SendableSample, SendableWriter, TexturePool};
 
 pub fn process_samples(
     writer: SendableWriter,
@@ -31,6 +31,7 @@ pub fn process_samples(
     replay_buffer: Option<Arc<ReplayBuffer>>,
     initial_window_position: Option<(i32, i32)>,
     initial_window_size: Option<(u32, u32)>,
+    texture_pool: Arc<TexturePool>,
 ) -> Result<()> {
     info!("Starting sample processing");
 
@@ -209,6 +210,7 @@ pub fn process_samples(
                         &*samp.sample,
                         output_width,
                         output_height,
+                        &texture_pool,
                     )?
                 };
                 // Add to replay buffer if enabled

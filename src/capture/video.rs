@@ -243,30 +243,17 @@ pub unsafe fn get_frames(
     let mut accumulated_delay = Duration::ZERO;
     let mut num_duped = 0;
 
-    // Create staging texture once and reuse
-    let staging_texture = create_staging_texture(&device, input_width, input_height)?;
-    let (blank_texture, _blank_resource) =
-        create_blank_dxgi_texture(&device, input_width, input_height)?;
-
-    // Initialize texture pool for reusable textures (for Media Foundation samples)
+    // Initialize texture pool for reusable textures
     use windows::Win32::Graphics::Direct3D11::*;
     use windows::Win32::Graphics::Dxgi::Common::*;
 
-    // Create a pool with capacity of 10 textures - adjust based on expected frame rate and processing time
-    // Create pool textures with RENDER_TARGET flag for cursor overlay
+    // Create a pool with capacity of 10 acquisition textures - adjust based on expected frame rate and processing time
     let texture_pool = TexturePool::new(
         device.clone(),
-        10, // Capacity
+        10, // Acquisition capacity
         input_width,
         input_height,
         DXGI_FORMAT_B8G8R8A8_UNORM,
-        D3D11_USAGE_DEFAULT.0.try_into().unwrap(),
-        (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET)
-            .0
-            .try_into()
-            .unwrap(),
-        0, // CPU access flags
-        0, // Misc flags
     )?;
     let texture_pool = Arc::new(texture_pool);
 
@@ -347,8 +334,6 @@ pub unsafe fn get_frames(
         match process_frame(
             duplication,
             &context_mutex,
-            &staging_texture,
-            &blank_texture,
             &mut window_tracker,
             fps_num,
             &send,
@@ -404,14 +389,25 @@ pub unsafe fn get_frames(
 
 // Draw cursor using GDI
 unsafe fn draw_cursor_gdi(texture: &ID3D11Texture2D) -> Result<()> {
-    use log::{debug, error, trace};
+    use log::{debug, error, trace, warn};
     use std::mem::size_of;
     use windows::Win32::Foundation::{BOOL, POINT};
+    use windows::Win32::Graphics::Direct3D11::{ID3D11Resource, ID3D11Texture2D, D3D11_RESOURCE_MISC_GDI_COMPATIBLE};
     use windows::Win32::Graphics::Dxgi::IDXGISurface1;
     use windows::Win32::Graphics::Gdi::DeleteObject;
     use windows::Win32::UI::WindowsAndMessaging::{
         DrawIconEx, GetCursorInfo, GetIconInfo, CURSORINFO, CURSOR_SHOWING, DI_NORMAL,
     };
+
+    // First, check if the texture has the GDI_COMPATIBLE flag
+    let resource: ID3D11Resource = texture.cast()?;
+    let mut desc = Default::default();
+    texture.GetDesc(&mut desc);
+    
+    if desc.MiscFlags.0 & D3D11_RESOURCE_MISC_GDI_COMPATIBLE.0 != D3D11_RESOURCE_MISC_GDI_COMPATIBLE.0 {
+        warn!("Texture does not have GDI_COMPATIBLE flag, cursor drawing will fail");
+        return Err(Error::from_win32().into());
+    }
 
     // Get the surface interface from the texture
     let surface: IDXGISurface1 = texture.cast()?;
@@ -480,8 +476,6 @@ unsafe fn draw_cursor_gdi(texture: &ID3D11Texture2D) -> Result<()> {
 unsafe fn process_frame(
     duplication: &IDXGIOutputDuplication,
     context_mutex: &Arc<Mutex<ID3D11DeviceContext>>,
-    staging_texture: &ID3D11Texture2D,
-    blank_texture: &ID3D11Texture2D,
     window_tracker: &mut WindowTracker,
     fps_num: u32,
     send: &Sender<SendableSample>,
@@ -529,44 +523,73 @@ unsafe fn process_frame(
 
     duplication.AcquireNextFrame(16, &mut info, &mut resource)?;
 
+    // Get textures from pool
+    let staging_texture = texture_pool.get_staging_texture().map_err(|e| {
+        log::error!("Failed to get staging texture from pool: {:?}", e);
+        FrameError::TexturePoolError
+    })?;
+
+    // First, acquire needed resources that don't require the context lock
+    // Acquire a texture from the pool
+    let pooled_texture = if let Some(resource) = resource.as_ref() {
+        Some(texture_pool.acquire_acquisition_texture().map_err(|e| {
+            log::error!("Failed to acquire texture from pool: {:?}", e);
+            FrameError::TexturePoolError
+        })?)
+    } else {
+        None
+    };
+    
     // Process the frame with context lock
     {
-        let context = context_mutex.lock().unwrap();
+        let mut context = context_mutex.lock().unwrap();
 
         if let Some(resource) = resource.as_ref() {
-            // Acquire a texture from the pool
-            let pooled_texture = texture_pool.acquire().map_err(|e| {
-                log::error!("Failed to acquire texture from pool: {:?}", e);
-                FrameError::TexturePoolError
-            })?;
+            // Pooled texture is already acquired above
+            let pooled_texture = pooled_texture.as_ref().unwrap();
 
             // Get the source texture from the resource
             let source_texture: ID3D11Texture2D = resource.cast()?;
 
             if should_show_content {
                 // Copy content from source to pooled texture
-                context.CopyResource(&pooled_texture, &source_texture);
-
-                // Copy from pooled to staging texture
-                context.CopyResource(staging_texture, &pooled_texture);
+                context.CopyResource(pooled_texture, &source_texture);
+                
+                // For cursor drawing, we need to release the context lock
+                if capture_cursor {
+                    // Drop the context lock before GDI operations to avoid deadlocks
+                    drop(context);
+                    
+                    // Draw cursor on the pooled texture (which has GDI_COMPATIBLE flag)
+                    if let Err(e) = draw_cursor_gdi(pooled_texture) {
+                        debug!("Failed to draw cursor: {:?}", e);
+                    }
+                    
+                    // Re-acquire the context
+                    context = context_mutex.lock().unwrap();
+                    
+                    // Copy from pooled (now with cursor) to staging texture
+                    context.CopyResource(&staging_texture, pooled_texture);
+                } else {
+                    // No cursor, just copy directly
+                    context.CopyResource(&staging_texture, pooled_texture);
+                }
             } else {
                 // Window not in focus, just use blank screen
-                context.CopyResource(staging_texture, blank_texture);
+                let blank_texture = texture_pool.get_blank_texture().map_err(|e| {
+                    log::error!("Failed to get blank texture from pool: {:?}", e);
+                    FrameError::TexturePoolError
+                })?;
+                context.CopyResource(&staging_texture, &blank_texture);
             }
-
-            // Return the pooled texture to the pool
-            texture_pool.release(pooled_texture);
         }
 
         // Context lock is automatically dropped at the end of this scope
     }
 
-    // Draw cursor if needed (outside the context lock)
-    if capture_cursor && should_show_content && resource.is_some() {
-        // Use our GDI-based cursor drawing approach
-        if let Err(e) = draw_cursor_gdi(staging_texture) {
-            debug!("Failed to draw cursor: {:?}", e);
-        }
+    // Return the pooled texture to the pool if we acquired one
+    if let Some(pooled_texture) = pooled_texture {
+        texture_pool.release_acquisition_texture(pooled_texture);
     }
 
     // Release the frame
@@ -579,14 +602,14 @@ unsafe fn process_frame(
     // Handle frame timing and duplication
     while *accumulated_delay >= frame_duration {
         debug!("Duping a frame to catch up");
-        send_frame(staging_texture, frame_count, send, sample_pool)
+        send_frame(&staging_texture, frame_count, send, sample_pool)
             .map_err(|_| FrameError::ChannelClosed)?;
         *next_frame_time += frame_duration;
         *accumulated_delay -= frame_duration;
         *num_duped += 1;
     }
 
-    send_frame(staging_texture, frame_count, send, sample_pool)
+    send_frame(&staging_texture, frame_count, send, sample_pool)
         .map_err(|_| FrameError::ChannelClosed)?;
     *next_frame_time += frame_duration;
 
