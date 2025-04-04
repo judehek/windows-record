@@ -32,8 +32,6 @@ pub struct TexturePool {
     acquisition_textures: Mutex<Vec<ID3D11Texture2D>>,
     /// Single blank texture (used for blank frames when window not in focus)
     blank_texture: Mutex<Option<ID3D11Texture2D>>,
-    /// Single staging texture (used for CPU-accessible data)
-    staging_texture: Mutex<Option<ID3D11Texture2D>>,
     /// Single conversion texture (used for format conversion e.g. BGRA to NV12)
     conversion_texture: Mutex<Option<ID3D11Texture2D>>,
     
@@ -51,8 +49,7 @@ impl TexturePool {
     /// 
     /// This texture pool manages several types of textures:
     /// - Acquisition textures: Used for capturing frames (with GDI compatibility for cursor overlay)
-    /// - Blank texture: Used for blank frames when window is not in focus (with GDI compatibility)
-    /// - Staging texture: Used for CPU access to texture data
+    /// - Blank texture: Used for blank frames when window is not in focus (with GDI compatibility) 
     /// - Conversion texture: Used for format conversion (BGRA to NV12)
     ///
     /// Note: For cursor drawing with GDI, textures need D3D11_RESOURCE_MISC_GDI_COMPATIBLE flag
@@ -104,21 +101,7 @@ impl TexturePool {
         #[cfg(debug_assertions)]
         debug!("TexturePool: Created blank texture at {:p}", &blank_texture as *const _);
         
-        // Create a staging texture with CPU read access
-        // Note: D3D11_RESOURCE_MISC_GDI_COMPATIBLE cannot be used with D3D11_USAGE_STAGING
-        let staging_texture = unsafe { Self::create_texture(
-            &device,
-            width,
-            height,
-            format,
-            D3D11_USAGE_STAGING.0 as u32,
-            0, // No bind flags
-            D3D11_CPU_ACCESS_READ.0 as u32,
-            0, // No misc flags
-        )? };
-        
-        #[cfg(debug_assertions)]
-        debug!("TexturePool: Created staging texture at {:p}", &staging_texture as *const _);
+        // We no longer need a staging texture - using acquisition textures directly
         
         // Create a conversion texture (NV12 format) for video processing
         let conversion_texture = unsafe { Self::create_texture(
@@ -145,10 +128,9 @@ impl TexturePool {
             format,
             acquisition_textures: Mutex::new(textures),
             blank_texture: Mutex::new(Some(blank_texture)),
-            staging_texture: Mutex::new(Some(staging_texture)),
             conversion_texture: Mutex::new(Some(conversion_texture)),
             #[cfg(debug_assertions)]
-            created_count: std::sync::atomic::AtomicU32::new((acquisition_capacity + 3) as u32),
+            created_count: std::sync::atomic::AtomicU32::new((acquisition_capacity + 2) as u32), // Reduced by 1 (no staging texture)
             #[cfg(debug_assertions)]
             acquired_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(debug_assertions)]
@@ -265,44 +247,7 @@ impl TexturePool {
         Ok(blank_texture)
     }
     
-    /// Get the staging texture (create if not exists)
-    pub fn get_staging_texture(&self) -> Result<ID3D11Texture2D> {
-        let mut staging_texture_lock = self.staging_texture.lock().unwrap();
-        
-        // If staging texture is None (was taken without being returned), create a new one
-        if staging_texture_lock.is_none() {
-            warn!("TexturePool: Staging texture was not properly returned, creating a new one");
-            
-            use windows::Win32::Graphics::Direct3D11::*;
-            
-            let texture = unsafe { Self::create_texture(
-                &self.device, 
-                self.width, 
-                self.height, 
-                self.format,
-                D3D11_USAGE_STAGING.0 as u32,
-                0, // No bind flags
-                D3D11_CPU_ACCESS_READ.0 as u32,
-                0, // Misc flags
-            )? };
-            
-            #[cfg(debug_assertions)] {
-                self.created_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                debug!("TexturePool: Created replacement staging texture at {:p}", &texture as *const _);
-            }
-            
-            *staging_texture_lock = Some(texture);
-        }
-        
-        // Clone the texture interface to return it (increases ref count)
-        // This way, the original stays in the pool
-        let staging_texture = staging_texture_lock.as_ref().unwrap().clone();
-        
-        #[cfg(debug_assertions)]
-        trace!("TexturePool: Providing staging texture at {:p}", &staging_texture as *const _);
-        
-        Ok(staging_texture)
-    }
+    // Removed get_staging_texture since we no longer need it
     
     /// Get the conversion texture (create if not exists)
     pub fn get_conversion_texture(&self) -> Result<ID3D11Texture2D> {

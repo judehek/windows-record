@@ -523,37 +523,26 @@ unsafe fn process_frame(
 
     duplication.AcquireNextFrame(16, &mut info, &mut resource)?;
 
-    // Get textures from pool
-    let staging_texture = texture_pool.get_staging_texture().map_err(|e| {
-        log::error!("Failed to get staging texture from pool: {:?}", e);
-        FrameError::TexturePoolError
-    })?;
-
-    // First, acquire needed resources that don't require the context lock
-    // Acquire a texture from the pool
-    let pooled_texture = if let Some(resource) = resource.as_ref() {
-        Some(texture_pool.acquire_acquisition_texture().map_err(|e| {
-            log::error!("Failed to acquire texture from pool: {:?}", e);
-            FrameError::TexturePoolError
-        })?)
-    } else {
-        None
-    };
+    // We'll track the texture that holds the final frame
+    let mut final_texture: Option<ID3D11Texture2D> = None;
     
     // Process the frame with context lock
     {
         let mut context = context_mutex.lock().unwrap();
 
         if let Some(resource) = resource.as_ref() {
-            // Pooled texture is already acquired above
-            let pooled_texture = pooled_texture.as_ref().unwrap();
-
-            // Get the source texture from the resource
-            let source_texture: ID3D11Texture2D = resource.cast()?;
-
             if should_show_content {
+                // Get the source texture from the resource
+                let source_texture: ID3D11Texture2D = resource.cast()?;
+                
+                // Acquire a texture from the pool for this frame
+                let pooled_texture = texture_pool.acquire_acquisition_texture().map_err(|e| {
+                    log::error!("Failed to acquire texture from pool: {:?}", e);
+                    FrameError::TexturePoolError
+                })?;
+                
                 // Copy content from source to pooled texture
-                context.CopyResource(pooled_texture, &source_texture);
+                context.CopyResource(&pooled_texture, &source_texture);
                 
                 // For cursor drawing, we need to release the context lock
                 if capture_cursor {
@@ -561,35 +550,29 @@ unsafe fn process_frame(
                     drop(context);
                     
                     // Draw cursor on the pooled texture (which has GDI_COMPATIBLE flag)
-                    if let Err(e) = draw_cursor_gdi(pooled_texture) {
+                    if let Err(e) = draw_cursor_gdi(&pooled_texture) {
                         debug!("Failed to draw cursor: {:?}", e);
                     }
                     
                     // Re-acquire the context
                     context = context_mutex.lock().unwrap();
-                    
-                    // Copy from pooled (now with cursor) to staging texture
-                    context.CopyResource(&staging_texture, pooled_texture);
-                } else {
-                    // No cursor, just copy directly
-                    context.CopyResource(&staging_texture, pooled_texture);
                 }
+                
+                // Remember this texture for later use in send_frame
+                final_texture = Some(pooled_texture);
             } else {
-                // Window not in focus, just use blank screen
+                // Window not in focus, use blank screen
                 let blank_texture = texture_pool.get_blank_texture().map_err(|e| {
                     log::error!("Failed to get blank texture from pool: {:?}", e);
                     FrameError::TexturePoolError
                 })?;
-                context.CopyResource(&staging_texture, &blank_texture);
+                
+                // Remember the blank texture for later use in send_frame
+                final_texture = Some(blank_texture.clone());
             }
         }
 
         // Context lock is automatically dropped at the end of this scope
-    }
-
-    // Return the pooled texture to the pool if we acquired one
-    if let Some(pooled_texture) = pooled_texture {
-        texture_pool.release_acquisition_texture(pooled_texture);
     }
 
     // Release the frame
@@ -599,18 +582,29 @@ unsafe fn process_frame(
         duplication.ReleaseFrame()?;
     }
 
-    // Handle frame timing and duplication
-    while *accumulated_delay >= frame_duration {
-        debug!("Duping a frame to catch up");
-        send_frame(&staging_texture, frame_count, send, sample_pool)
+    // Get the texture that contains our final frame
+    if let Some(texture) = final_texture {
+        // Handle frame timing and duplication
+        while *accumulated_delay >= frame_duration {
+            debug!("Duping a frame to catch up");
+            send_frame(&texture, frame_count, send, sample_pool)
+                .map_err(|_| FrameError::ChannelClosed)?;
+            *next_frame_time += frame_duration;
+            *accumulated_delay -= frame_duration;
+            *num_duped += 1;
+        }
+        
+        // Send the normal frame
+        send_frame(&texture, frame_count, send, sample_pool)
             .map_err(|_| FrameError::ChannelClosed)?;
-        *next_frame_time += frame_duration;
-        *accumulated_delay -= frame_duration;
-        *num_duped += 1;
+            
+        // If this was an acquisition texture (not the blank texture), return it to the pool
+        if should_show_content {
+            texture_pool.release_acquisition_texture(texture);
+        }
+    } else {
+        warn!("No texture was prepared for this frame!");
     }
-
-    send_frame(&staging_texture, frame_count, send, sample_pool)
-        .map_err(|_| FrameError::ChannelClosed)?;
     *next_frame_time += frame_duration;
 
     let current_time = Instant::now();

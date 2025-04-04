@@ -24,7 +24,7 @@ fn main() -> Result<()> {
         .build();
 
     // Create the recorder with your target window name
-    let recorder = Recorder::new(config)?.with_process_name("League of Legends");
+    let recorder = Recorder::new(config)?.with_process_name("Chrome");
 
     // Short delay before starting recording
     std::thread::sleep(Duration::from_secs(1));
