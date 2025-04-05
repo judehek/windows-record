@@ -424,7 +424,7 @@ impl RecorderInner {
             info!("Creating texture pool for video processing");
             let processing_texture_pool = crate::types::TexturePool::new(
                 device.clone(),
-                5, // Fewer acquisition textures needed for processing
+                3,
                 input_width,
                 input_height,
                 windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
