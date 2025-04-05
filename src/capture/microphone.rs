@@ -1,5 +1,4 @@
-use log::{debug, info, trace};
-use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+use log::{debug, error, info, trace};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -7,6 +6,7 @@ use std::sync::Arc;
 use std::sync::Barrier;
 use windows::core::implement;
 use windows::core::Result;
+use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Foundation::*;
 use windows::Win32::Media::Audio::*;
 use windows::Win32::Media::MediaFoundation::{
@@ -86,6 +86,13 @@ pub unsafe fn collect_microphone(
         Ok(client) => client,
         Err(e) => {
             info!("Failed to setup audio client: {:?}", e);
+            
+            // Wait on the barrier even when we can't get a microphone
+            // This prevents the other threads from waiting forever
+            info!("Waiting on barrier before returning from microphone thread with error");
+            started.wait();
+            info!("Barrier passed, microphone thread will now exit with error");
+            
             return Err(e);
         }
     };
@@ -145,7 +152,7 @@ pub unsafe fn collect_microphone(
         Some(qpc) => {
             info!("Using shared QPC start time: {}", qpc);
             qpc
-        },
+        }
         None => {
             let mut start_qpc_i64: i64 = 0;
             if !QueryPerformanceCounter(&mut start_qpc_i64).as_bool() {
@@ -296,20 +303,30 @@ unsafe fn setup_microphone_client_for_device(device_id: Option<&str>) -> Result<
                 return Err(e);
             }
         };
-    
+
     // Get device either by ID or default
     let device = if let Some(id) = device_id {
         info!("Using specified audio input device ID: {}", id);
         match enumerator.GetDevice(windows::core::PCWSTR::from_raw(
-            windows::core::HSTRING::from(id).as_ptr()
+            windows::core::HSTRING::from(id).as_ptr(),
         )) {
             Ok(dev) => dev,
             Err(e) => {
-                info!("Failed to get device with ID {}: {:?}. Falling back to default.", id, e);
+                info!(
+                    "Failed to get device with ID {}: {:?}. Falling back to default.",
+                    id, e
+                );
                 match enumerator.GetDefaultAudioEndpoint(eCapture, eConsole) {
                     Ok(dev) => dev,
                     Err(e) => {
-                        info!("Failed to get default audio endpoint: {:?}", e);
+                        // Check if error is "Element not found" (0x80070490) which indicates no microphone
+                        // Convert HSTRING to String for comparison
+                        let error_message = e.code().message().to_string_lossy();
+                        if error_message.contains("Element not found") {
+                            info!("No microphone found on system. Error code: {:X} (Element not found)", e.code().0);
+                        } else {
+                            error!("Failed to get default audio endpoint: {:?}", e);
+                        }
                         return Err(e);
                     }
                 }
@@ -320,7 +337,14 @@ unsafe fn setup_microphone_client_for_device(device_id: Option<&str>) -> Result<
         match enumerator.GetDefaultAudioEndpoint(eCapture, eConsole) {
             Ok(dev) => dev,
             Err(e) => {
-                info!("Failed to get default audio endpoint: {:?}", e);
+                // Check if error is "Element not found" (0x80070490) which indicates no microphone
+                // Convert HSTRING to String for comparison
+                let error_message = e.code().message().to_string_lossy();
+                if error_message.contains("Element not found") {
+                    info!("No microphone found on system. Error code: {:X} (Element not found)", e.code().0);
+                } else {
+                    error!("Failed to get default audio endpoint: {:?}", e);
+                }
                 return Err(e);
             }
         }
@@ -331,10 +355,16 @@ unsafe fn setup_microphone_client_for_device(device_id: Option<&str>) -> Result<
         let id = id_ptr.to_string().unwrap_or_default();
         info!("Selected audio input device ID: {}", id);
     }
-    
+
     if let Ok(props) = device.OpenPropertyStore(STGM_READ) {
         if let Ok(prop_value) = props.GetValue(&PKEY_Device_FriendlyName) {
-            let name = prop_value.Anonymous.Anonymous.Anonymous.pwszVal.to_string().unwrap_or_default();
+            let name = prop_value
+                .Anonymous
+                .Anonymous
+                .Anonymous
+                .pwszVal
+                .to_string()
+                .unwrap_or_default();
             info!("Selected audio input device name: {}", name);
         }
     }
@@ -368,18 +398,20 @@ unsafe fn setup_microphone_client_for_device(device_id: Option<&str>) -> Result<
         wFormatTag: WAVE_FORMAT_PCM.try_into().unwrap(),
         nChannels: 2,
         nSamplesPerSec: 44100,
-        nAvgBytesPerSec: 176400,  // nSamplesPerSec * nBlockAlign (44100 * 4)
-        nBlockAlign: 4,           // nChannels * wBitsPerSample/8 (2 * 16/8)
+        nAvgBytesPerSec: 176400, // nSamplesPerSec * nBlockAlign (44100 * 4)
+        nBlockAlign: 4,          // nChannels * wBitsPerSample/8 (2 * 16/8)
         wBitsPerSample: 16,
         cbSize: 0,
     };
 
     let init_result = audio_client.Initialize(
         AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+        AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+            | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+            | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
         300000,
         0,
-        &wave_format,  // Use our hard-coded format instead of mix_format_ptr
+        &wave_format, // Use our hard-coded format instead of mix_format_ptr
         None,
     );
 

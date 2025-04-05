@@ -308,8 +308,17 @@ pub fn process_samples(
                 // Error handling remains the same
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
-                    error!("Microphone channel disconnected");
+                    // This could be because there's no microphone device
+                    info!("Microphone channel disconnected - no microphone data will be included");
                     microphone_disconnected = true;
+                    
+                    // If we're supposed to be mixing, update the AudioMixer to not wait for mic data
+                    if let Some(mixer) = &mut audio_mixer {
+                        if capture_audio && capture_microphone {
+                            info!("Updating AudioMixer to no longer wait for microphone samples");
+                            mixer.set_both_sources_active(false);
+                        }
+                    }
                 }
             }
         }

@@ -14,7 +14,7 @@ fn main() -> Result<()> {
         // Input dimensions will be auto-detected from monitor resolution
         .output_dimensions(1920, 1080)
         .capture_audio(true)
-        .capture_microphone(false)
+        .capture_microphone(true)
         .audio_source(AudioSource::Desktop)
         .microphone_volume(1.0)
         .system_volume(1.0)

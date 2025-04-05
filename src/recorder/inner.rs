@@ -291,8 +291,14 @@ impl RecorderInner {
             info!("D3D11 context wrapped in mutex");
 
             // Set up synchronization barrier
+            // Always include video thread (1) plus audio if enabled
+            // The microphone thread will wait on the barrier even if it fails,
+            // so we need to include it in the count if microphone capture is enabled
             let barrier_count =
-                if capture_audio { 1 } else { 0 } + if capture_microphone { 1 } else { 0 } + 1;
+                1 + // Video thread always included
+                (if capture_audio { 1 } else { 0 }) + 
+                (if capture_microphone { 1 } else { 0 });
+                
             info!(
                 "Creating synchronization barrier with {} threads",
                 barrier_count
@@ -384,6 +390,18 @@ impl RecorderInner {
                         Some(shared_start_qpc),
                         device_clone.as_deref(),
                     );
+                    
+                    // Check for the specific "Element not found" error (0x80070490)
+                    if let Err(e) = &result {
+                        // Convert HSTRING to String for comparison
+                        let error_message = e.code().message().to_string_lossy();
+                        if error_message.contains("Element not found") {
+                            info!("No microphone device found (Error {:X}). Recording will continue without microphone.", e.code().0);
+                            // Return Ok to allow recording to continue without microphone
+                            return Ok(());
+                        }
+                    }
+                    
                     info!(
                         "Microphone capture thread completed with result: {:?}",
                         result.is_ok()
