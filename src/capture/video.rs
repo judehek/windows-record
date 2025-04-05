@@ -573,7 +573,6 @@ unsafe fn process_frame(
                 // Remember this texture for later use in send_frame
                 final_texture = Some(pooled_texture);
             } else {
-                info!("Using blank texture");
                 // Window not in focus, use blank screen
                 let blank_texture = texture_pool.get_blank_texture().map_err(|e| {
                     log::error!("Failed to get blank texture from pool: {:?}", e);

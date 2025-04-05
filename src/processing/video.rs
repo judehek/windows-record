@@ -266,7 +266,7 @@ pub unsafe fn convert_bgra_to_nv12(
 
     // Get the conversion texture from the pool
     let nv12_texture = texture_pool.get_conversion_texture()?;
-    
+
     // Create output sample from the texture
     let output_sample = create_output_sample_from_texture(&nv12_texture)?;
 
@@ -362,54 +362,4 @@ unsafe fn create_output_sample_from_texture(texture: &ID3D11Texture2D) -> Result
     drop(output_buffer);
 
     Ok(output_sample)
-}
-
-/// Create a new NV12 texture and output sample (legacy function for compatibility)
-unsafe fn create_nv12_output(
-    device: &ID3D11Device,
-    output_width: u32,
-    output_height: u32,
-) -> Result<(ID3D11Texture2D, IMFSample)> {
-    use windows::Win32::Graphics::Direct3D11::*;
-    use windows::Win32::Graphics::Dxgi::Common::*;
-
-    // Create NV12 texture with optimized flags
-    let nv12_desc = D3D11_TEXTURE2D_DESC {
-        Width: output_width,
-        Height: output_height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: DXGI_FORMAT_NV12,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
-        CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(0),
-        MiscFlags: D3D11_RESOURCE_MISC_FLAG(0), // No flags needed generally
-    };
-
-    let mut nv12_texture = None;
-    device.CreateTexture2D(&nv12_desc, None, Some(&mut nv12_texture))?;
-    let nv12_texture = nv12_texture.unwrap();
-
-    // Create output sample from the texture
-    let output_sample = create_output_sample_from_texture(&nv12_texture)?;
-
-    Ok((nv12_texture, output_sample)) // Return the texture handle too, might be useful elsewhere temporarily
-}
-
-// --- flush_converter remains unchanged ---
-pub unsafe fn flush_converter(converter: &IMFTransform) -> Result<()> {
-    info!("Flushing video converter");
-    // Send flush command
-    converter.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
-    // After flush, MFT might require specific commands before processing again,
-    // like NOTIFY_BEGIN_STREAMING or NOTIFY_START_OF_STREAM.
-    // Drain is usually for signaling end-of-stream, not typically needed after flush.
-    // Let's remove drain unless specifically needed.
-    // converter.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
-    info!("Video converter flushed");
-    Ok(())
 }
