@@ -245,16 +245,6 @@ impl SamplePool {
         Ok(sample)
     }
 
-    /// Return a sample to the pool for reuse with the same texture
-    pub unsafe fn release_sample(
-        &self,
-        texture: &ID3D11Texture2D,
-        sample: IMFSample,
-    ) -> Result<()> {
-        let texture_id = Self::get_texture_id(texture);
-        self.release_no_texture(texture_id, sample)
-    }
-
     /// Return a sample to the pool using just the texture ID
     /// This is used by SendableSample's Drop implementation
     pub unsafe fn release_no_texture(&self, texture_id: usize, sample: IMFSample) -> Result<()> {

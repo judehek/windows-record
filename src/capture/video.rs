@@ -136,6 +136,13 @@ impl WindowTracker {
         let foreground_window = unsafe { GetForegroundWindow() };
         let is_target_window = foreground_window == self.hwnd;
 
+        log::debug!(
+            "Foreground window: {:?}, Target window: {:?}, Is target in focus: {}",
+            foreground_window,
+            self.hwnd,
+            is_target_window
+        );
+
         if is_target_window {
             // If window is now in focus, remember this
             self.ever_focused = true;
@@ -247,10 +254,10 @@ pub unsafe fn get_frames(
     use windows::Win32::Graphics::Direct3D11::*;
     use windows::Win32::Graphics::Dxgi::Common::*;
 
-    // Create a pool with capacity of 10 acquisition textures - adjust based on expected frame rate and processing time
+    // Create a pool with capacity of 1 acquisition textures - adjust based on expected frame rate and processing time
     let texture_pool = TexturePool::new(
         device.clone(),
-        10, // Acquisition capacity
+        5, // Acquisition capacity
         input_width,
         input_height,
         DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -392,7 +399,9 @@ unsafe fn draw_cursor_gdi(texture: &ID3D11Texture2D) -> Result<()> {
     use log::{debug, error, trace, warn};
     use std::mem::size_of;
     use windows::Win32::Foundation::{BOOL, POINT};
-    use windows::Win32::Graphics::Direct3D11::{ID3D11Resource, ID3D11Texture2D, D3D11_RESOURCE_MISC_GDI_COMPATIBLE};
+    use windows::Win32::Graphics::Direct3D11::{
+        ID3D11Resource, ID3D11Texture2D, D3D11_RESOURCE_MISC_GDI_COMPATIBLE,
+    };
     use windows::Win32::Graphics::Dxgi::IDXGISurface1;
     use windows::Win32::Graphics::Gdi::DeleteObject;
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -403,8 +412,10 @@ unsafe fn draw_cursor_gdi(texture: &ID3D11Texture2D) -> Result<()> {
     let resource: ID3D11Resource = texture.cast()?;
     let mut desc = Default::default();
     texture.GetDesc(&mut desc);
-    
-    if desc.MiscFlags.0 & D3D11_RESOURCE_MISC_GDI_COMPATIBLE.0 != D3D11_RESOURCE_MISC_GDI_COMPATIBLE.0 {
+
+    if desc.MiscFlags.0 & D3D11_RESOURCE_MISC_GDI_COMPATIBLE.0
+        != D3D11_RESOURCE_MISC_GDI_COMPATIBLE.0
+    {
         warn!("Texture does not have GDI_COMPATIBLE flag, cursor drawing will fail");
         return Err(Error::from_win32().into());
     }
@@ -525,7 +536,7 @@ unsafe fn process_frame(
 
     // We'll track the texture that holds the final frame
     let mut final_texture: Option<ID3D11Texture2D> = None;
-    
+
     // Process the frame with context lock
     {
         let mut context = context_mutex.lock().unwrap();
@@ -534,39 +545,40 @@ unsafe fn process_frame(
             if should_show_content {
                 // Get the source texture from the resource
                 let source_texture: ID3D11Texture2D = resource.cast()?;
-                
+
                 // Acquire a texture from the pool for this frame
                 let pooled_texture = texture_pool.acquire_acquisition_texture().map_err(|e| {
                     log::error!("Failed to acquire texture from pool: {:?}", e);
                     FrameError::TexturePoolError
                 })?;
-                
+
                 // Copy content from source to pooled texture
                 context.CopyResource(&pooled_texture, &source_texture);
-                
+
                 // For cursor drawing, we need to release the context lock
                 if capture_cursor {
                     // Drop the context lock before GDI operations to avoid deadlocks
                     drop(context);
-                    
+
                     // Draw cursor on the pooled texture (which has GDI_COMPATIBLE flag)
                     if let Err(e) = draw_cursor_gdi(&pooled_texture) {
                         debug!("Failed to draw cursor: {:?}", e);
                     }
-                    
+
                     // Re-acquire the context
                     context = context_mutex.lock().unwrap();
                 }
-                
+
                 // Remember this texture for later use in send_frame
                 final_texture = Some(pooled_texture);
             } else {
+                info!("Using blank texture");
                 // Window not in focus, use blank screen
                 let blank_texture = texture_pool.get_blank_texture().map_err(|e| {
                     log::error!("Failed to get blank texture from pool: {:?}", e);
                     FrameError::TexturePoolError
                 })?;
-                
+
                 // Remember the blank texture for later use in send_frame
                 final_texture = Some(blank_texture.clone());
             }
@@ -593,11 +605,11 @@ unsafe fn process_frame(
             *accumulated_delay -= frame_duration;
             *num_duped += 1;
         }
-        
+
         // Send the normal frame
         send_frame(&texture, frame_count, send, sample_pool)
             .map_err(|_| FrameError::ChannelClosed)?;
-            
+
         // If this was an acquisition texture (not the blank texture), return it to the pool
         if should_show_content {
             texture_pool.release_acquisition_texture(texture);
