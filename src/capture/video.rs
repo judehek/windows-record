@@ -6,9 +6,10 @@ use std::sync::{Barrier, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::Error;
 use windows::core::{ComInterface, Error as WindowsError, Result};
-use windows::Win32::Foundation::{BOOL, HWND};
+use windows::Win32::Foundation::{BOOL, HWND, TRUE};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D};
-use windows::Win32::Graphics::Dxgi::{IDXGIOutputDuplication, IDXGIResource};
+use windows::Win32::Graphics::Dxgi::{IDXGIOutputDuplication, IDXGIResource, IDXGISurface};
+use windows::Win32::Media::MediaFoundation::MFCreateDXGISurfaceBuffer;
 use windows::Win32::System::Threading::*;
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
@@ -631,16 +632,30 @@ unsafe fn send_frame(
     send: &Sender<SendableSample>,
     sample_pool: &Arc<SamplePool>,
 ) -> Result<()> {
-    // Get a sample from the pool instead of creating a new one each time
-    let samp = sample_pool.acquire_for_texture(texture)?;
+    // Get a sample from the pool
+    let sample = sample_pool.acquire_sample()?;
 
-    // Set the sample time based on frame count
-    sample_pool.set_sample_time(&samp, frame_count)?;
+    // Get the surface interface from the texture
+    let surface: IDXGISurface = texture.cast()?;
+
+    // Create a DXGI buffer from the surface
+    let buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &surface, 0, TRUE)?;
+
+    // Clear any previous buffers and add the new one
+    sample.RemoveAllBuffers()?;
+    sample.AddBuffer(&buffer)?;
+
+    // Release the surface interface (buffer still holds reference to underlying resource)
+    drop(surface);
+
+    // Set the sample time and duration
+    sample_pool.set_sample_time(&sample, frame_count)?;
+    sample.SetSampleDuration(10_000_000 / sample_pool.fps_num as i64)?;
 
     // Create a pooled SendableSample that will return the sample to the pool when dropped
-    let sendable = SendableSample::new_pooled(samp, texture, sample_pool.clone());
+    let sendable = SendableSample::new_pooled(sample, sample_pool.clone());
 
-    // Send the sample and return to pool if fails
+    // Send the sample (it will be returned to pool via Drop if sending fails)
     match send.send(sendable) {
         Ok(_) => Ok(()),
         Err(e) => {

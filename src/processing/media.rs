@@ -403,8 +403,6 @@ unsafe fn create_audio_output_type() -> Result<IMFMediaType> {
     Ok(output_type)
 }
 
-// The create_dxgi_sample function has been moved to SamplePool in types/mod.rs
-
 pub unsafe fn init_media_foundation() -> Result<()> {
     info!("init_media_foundation - Starting");
 

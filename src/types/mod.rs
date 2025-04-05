@@ -18,7 +18,6 @@ pub use texture_pool::TexturePool;
 /// A wrapper for IMFSample that can be sent between threads
 pub struct SendableSample {
     pub sample: Arc<IMFSample>,
-    texture_ptr: Option<usize>,
     pool: Option<Arc<SamplePool>>,
 }
 
@@ -27,24 +26,17 @@ impl SendableSample {
     pub fn new(sample: IMFSample) -> Self {
         Self {
             sample: Arc::new(sample),
-            texture_ptr: None,
             pool: None,
         }
     }
 
     /// Create a new SendableSample with pool tracking for auto-return
-    pub fn new_pooled(sample: IMFSample, texture: &ID3D11Texture2D, pool: Arc<SamplePool>) -> Self {
-        let texture_ptr = texture as *const _ as usize;
-
+    pub fn new_pooled(sample: IMFSample, pool: Arc<SamplePool>) -> Self {
         #[cfg(debug_assertions)]
-        trace!(
-            "Creating pooled SendableSample for texture {:p}",
-            texture as *const _
-        );
+        trace!("Creating pooled SendableSample");
 
         Self {
             sample: Arc::new(sample),
-            texture_ptr: Some(texture_ptr),
             pool: Some(pool),
         }
     }
@@ -65,13 +57,11 @@ unsafe impl Sync for SendableSample {}
 /// When SendableSample is dropped, return the sample to the pool if it was pooled
 impl Drop for SendableSample {
     fn drop(&mut self) {
-        if let (Some(pool), Some(texture_ptr)) = (&self.pool, self.texture_ptr) {
+        if let Some(pool) = &self.pool {
             // Only return to pool if we're the last reference to this sample
             if Arc::strong_count(&self.sample) == 1 {
                 // Create local copies to avoid borrowing issues in the closure
-                let texture_ptr_copy = texture_ptr;
                 let pool_clone = pool.clone();
-
                 let sample_clone = self.sample.as_ref().clone();
 
                 // Use a thread-local to track whether we're already inside a drop to prevent cycles
@@ -85,17 +75,11 @@ impl Drop for SendableSample {
                         *in_drop.borrow_mut() = true;
 
                         // Return the sample to the pool
-                        unsafe {
-                            if let Err(e) =
-                                pool_clone.release_no_texture(texture_ptr_copy, sample_clone)
-                            {
-                                error!("Failed to return sample to pool: {:?}", e);
-                            } else {
-                                trace!(
-                                    "Successfully returned sample for texture {:p} to pool",
-                                    texture_ptr_copy as *const ID3D11Texture2D
-                                );
-                            }
+                        if let Err(e) = pool_clone.release_sample(sample_clone) {
+                            error!("Failed to return sample to pool: {:?}", e);
+                        } else {
+                            #[cfg(debug_assertions)]
+                            trace!("Successfully returned sample to pool");
                         }
 
                         *in_drop.borrow_mut() = false;
@@ -119,13 +103,13 @@ pub struct SendableWriter(pub Arc<IMFSinkWriter>);
 unsafe impl Send for SendableWriter {}
 unsafe impl Sync for SendableWriter {}
 
-/// A thread-safe pool that manages texture-to-sample bindings
-/// This maintains a mapping between texture pointers and IMFSample objects
+/// A thread-safe pool of reusable IMFSample objects
+/// This maintains a simple pool of IMFSample objects that can be used with any texture
 pub struct SamplePool {
-    /// Mutex-protected map of texture pointers to available IMFSample objects
-    samples: Mutex<HashMap<usize, Vec<IMFSample>>>,
+    /// Mutex-protected vector of available IMFSample objects
+    samples: Mutex<Vec<IMFSample>>,
     /// FPS value used for sample duration
-    fps_num: u32,
+    pub fps_num: u32,
     // Tracking for debug purposes
     #[cfg(debug_assertions)]
     created_count: std::sync::atomic::AtomicU32,
@@ -141,7 +125,7 @@ impl SamplePool {
         info!("Initializing SamplePool with FPS: {}", fps_num);
 
         Self {
-            samples: Mutex::new(HashMap::with_capacity(initial_capacity)),
+            samples: Mutex::new(Vec::with_capacity(initial_capacity)),
             fps_num,
             #[cfg(debug_assertions)]
             created_count: std::sync::atomic::AtomicU32::new(0),
@@ -152,62 +136,21 @@ impl SamplePool {
         }
     }
 
-    /// Get a unique ID for a texture to use as a hash key
-    fn get_texture_id(texture: &ID3D11Texture2D) -> usize {
-        texture as *const _ as usize
-    }
+    /// Acquire a sample from the pool or create a new one if the pool is empty
+    pub fn acquire_sample(&self) -> Result<IMFSample> {
+        let mut samples = self.samples.lock().unwrap();
 
-    /// Create a new Media Foundation sample from a texture
-    unsafe fn create_sample_for_texture(
-        texture: &ID3D11Texture2D,
-        fps_num: u32,
-    ) -> Result<IMFSample> {
-        // Cast the texture to an IDXGISurface
-        let surface: IDXGISurface = texture.cast()?;
-
-        // Create a new Media Foundation sample
-        let sample: IMFSample = MFCreateSample()?;
-
-        // Create a DXGI buffer from the surface
-        let buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &surface, 0, TRUE)?;
-
-        // Add the buffer to the sample
-        sample.AddBuffer(&buffer)?;
-
-        // Set the sample duration based on the frame rate
-        sample.SetSampleDuration(10_000_000 / fps_num as i64)?;
-
-        // Explicitly release the surface to avoid a reference leak
-        // The buffer still maintains its reference to the underlying resource
-        drop(surface);
-
-        Ok(sample)
-    }
-
-    /// Acquire or create a sample for the given texture
-    pub unsafe fn acquire_for_texture(&self, texture: &ID3D11Texture2D) -> Result<IMFSample> {
-        let texture_id = Self::get_texture_id(texture);
-        let mut samples_map = self.samples.lock().unwrap();
-
-        // Get or create the entry for this texture
-        let samples_for_texture = samples_map.entry(texture_id).or_insert_with(Vec::new);
-
-        let sample = if let Some(sample) = samples_for_texture.pop() {
+        let sample = if let Some(sample) = samples.pop() {
             #[cfg(debug_assertions)]
-            trace!(
-                "SamplePool: Reusing sample for texture {:p}",
-                texture as *const _
-            );
+            trace!("SamplePool: Reusing sample from pool");
             sample
         } else {
-            // No existing sample for this texture, create a new one
+            // If pool is empty, create a new empty sample
             #[cfg(debug_assertions)]
-            debug!(
-                "SamplePool: Creating new sample for texture {:p}",
-                texture as *const _
-            );
+            debug!("SamplePool: Creating new sample");
 
-            let sample = Self::create_sample_for_texture(texture, self.fps_num)?;
+            // Create a new Media Foundation sample
+            let sample: IMFSample = unsafe { MFCreateSample() }?;
 
             #[cfg(debug_assertions)]
             {
@@ -229,8 +172,7 @@ impl SamplePool {
                 .load(std::sync::atomic::Ordering::SeqCst);
             let active = acquired - released + 1;
 
-            // Only log at larger intervals and avoid logging consecutive frames
-            // Use acquired count as a throttle to avoid rapid consecutive logs
+            // Only log at larger intervals
             if acquired % 300 == 0 {
                 info!(
                     "SamplePool stats - created: {}, acquired: {}, released: {}, active: {}",
@@ -245,18 +187,16 @@ impl SamplePool {
         Ok(sample)
     }
 
-    /// Return a sample to the pool using just the texture ID
-    /// This is used by SendableSample's Drop implementation
-    pub unsafe fn release_no_texture(&self, texture_id: usize, sample: IMFSample) -> Result<()> {
+    /// Return a sample to the pool for reuse
+    pub fn release_sample(&self, sample: IMFSample) -> Result<()> {
         #[cfg(debug_assertions)]
-        trace!(
-            "SamplePool: Returning sample for texture ID {} to pool",
-            texture_id
-        );
+        trace!("SamplePool: Returning sample to pool");
 
-        let mut samples_map = self.samples.lock().unwrap();
-        let samples_for_texture = samples_map.entry(texture_id).or_insert_with(Vec::new);
-        samples_for_texture.push(sample);
+        // Clear all buffers from the sample before returning it to the pool
+        unsafe { sample.RemoveAllBuffers()? };
+
+        let mut samples = self.samples.lock().unwrap();
+        samples.push(sample);
 
         #[cfg(debug_assertions)]
         {
