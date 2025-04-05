@@ -24,8 +24,7 @@ fn main() -> Result<()> {
         .build();
 
     // Create the recorder with your target window name
-    let recorder = Recorder::new(config)?
-        .with_process_name("League of Legends");
+    let recorder = Recorder::new(config)?.with_process_name("League of Legends");
 
     // Short delay before starting recording
     std::thread::sleep(Duration::from_secs(1));
@@ -43,11 +42,11 @@ fn main() -> Result<()> {
     // Record for 10 seconds
     info!("Recording for 10 seconds...");
     std::thread::sleep(Duration::from_secs(10));
-    
+
     // Stop recording
     info!("Stopping recording");
     recorder.stop_recording()?;
-    
+
     info!("Application finished - all resources properly cleaned up");
     Ok(())
 }

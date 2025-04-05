@@ -135,7 +135,7 @@ pub unsafe fn collect_audio(
         Some(qpc) => {
             info!("Using shared QPC start time: {}", qpc);
             qpc
-        },
+        }
         None => {
             let mut start_qpc_i64: i64 = 0;
             if !QueryPerformanceCounter(&mut start_qpc_i64).as_bool() {
@@ -267,9 +267,13 @@ pub unsafe fn collect_audio(
     Ok(())
 }
 
-unsafe fn setup_audio_client(proc_id: u32, wave_format: &WAVEFORMATEX, audio_source: &AudioSource) -> Result<IAudioClient> {
+unsafe fn setup_audio_client(
+    proc_id: u32,
+    wave_format: &WAVEFORMATEX,
+    audio_source: &AudioSource,
+) -> Result<IAudioClient> {
     info!("Setting up audio client with source: {:?}", audio_source);
-    
+
     match audio_source {
         AudioSource::ActiveWindow => {
             // Process-specific audio capture (existing implementation)
@@ -291,7 +295,8 @@ unsafe fn setup_audio_client(proc_id: u32, wave_format: &WAVEFORMATEX, audio_sou
                 &activation_params as *const _ as *mut _;
 
             let handler = WASAPIActivateAudioInterfaceCompletionHandler::new();
-            let handler_interface: IActivateAudioInterfaceCompletionHandler = handler.clone().into();
+            let handler_interface: IActivateAudioInterfaceCompletionHandler =
+                handler.clone().into();
 
             ActivateAudioInterfaceAsync(
                 VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
@@ -304,7 +309,10 @@ unsafe fn setup_audio_client(proc_id: u32, wave_format: &WAVEFORMATEX, audio_sou
 
             audio_client.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                AUDCLNT_STREAMFLAGS_LOOPBACK
+                    | AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+                    | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+                    | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
                 300000,
                 0,
                 wave_format,
@@ -312,11 +320,11 @@ unsafe fn setup_audio_client(proc_id: u32, wave_format: &WAVEFORMATEX, audio_sou
             )?;
 
             Ok(audio_client)
-        },
+        }
         AudioSource::Desktop => {
             // System-wide audio capture
             info!("Setting up desktop-wide audio capture");
-            
+
             // Initialize COM if not already initialized
             let coinit_result = CoInitializeEx(None, COINIT_MULTITHREADED);
             if let Err(e) = coinit_result {
@@ -327,41 +335,51 @@ unsafe fn setup_audio_client(proc_id: u32, wave_format: &WAVEFORMATEX, audio_sou
             }
 
             // Get the device enumerator
-            let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
-            
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+
             // Get the default render endpoint
             let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?;
-            
+
             // Log device info
             if let Ok(id_ptr) = device.GetId() {
                 let id = id_ptr.to_string().unwrap_or_default();
                 info!("Selected audio output device ID: {}", id);
             }
-            
+
             if let Ok(props) = device.OpenPropertyStore(STGM_READ) {
                 if let Ok(prop_value) = props.GetValue(&PKEY_Device_FriendlyName) {
-                    let name = prop_value.Anonymous.Anonymous.Anonymous.pwszVal.to_string().unwrap_or_default();
+                    let name = prop_value
+                        .Anonymous
+                        .Anonymous
+                        .Anonymous
+                        .pwszVal
+                        .to_string()
+                        .unwrap_or_default();
                     info!("Selected audio output device name: {}", name);
                 }
             }
-            
+
             // Activate the audio client
             let audio_client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
-            
+
             // Initialize the audio client for loopback mode
             audio_client.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                AUDCLNT_STREAMFLAGS_LOOPBACK
+                    | AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+                    | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+                    | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
                 300000,
                 0,
                 wave_format,
                 None,
             )?;
-            
+
             // Create event handle for the audio client
             let event = CreateEventW(None, false, false, None)?;
             audio_client.SetEventHandle(event)?;
-            
+
             Ok(audio_client)
         }
     }
@@ -400,10 +418,8 @@ unsafe fn create_audio_sample(
     // Format-specific processing based on bit depth
     if wave_format.wBitsPerSample == 32 {
         // 32-bit float handling
-        let src = std::slice::from_raw_parts(
-            buffer as *const f32,
-            num_frames as usize * num_channels,
-        );
+        let src =
+            std::slice::from_raw_parts(buffer as *const f32, num_frames as usize * num_channels);
         let dst = std::slice::from_raw_parts_mut(
             buffer_data as *mut f32,
             num_frames as usize * num_channels,
@@ -413,10 +429,8 @@ unsafe fn create_audio_sample(
         std::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len());
     } else if wave_format.wBitsPerSample == 16 {
         // 16-bit integer handling
-        let src = std::slice::from_raw_parts(
-            buffer as *const i16,
-            num_frames as usize * num_channels,
-        );
+        let src =
+            std::slice::from_raw_parts(buffer as *const i16, num_frames as usize * num_channels);
         let dst = std::slice::from_raw_parts_mut(
             buffer_data as *mut i16,
             num_frames as usize * num_channels,

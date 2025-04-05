@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use windows::core::Result;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 
-use crate::types::{ReplayBuffer, SendableSample, SendableWriter};
+use crate::types::{ReplayBuffer, SendableSample, SendableWriter, TexturePool};
 
 pub fn process_samples(
     writer: SendableWriter,
@@ -31,6 +31,7 @@ pub fn process_samples(
     replay_buffer: Option<Arc<ReplayBuffer>>,
     initial_window_position: Option<(i32, i32)>,
     initial_window_size: Option<(u32, u32)>,
+    texture_pool: Arc<TexturePool>,
 ) -> Result<()> {
     info!("Starting sample processing");
 
@@ -209,6 +210,7 @@ pub fn process_samples(
                         &*samp.sample,
                         output_width,
                         output_height,
+                        &texture_pool,
                     )?
                 };
                 // Add to replay buffer if enabled
@@ -306,8 +308,17 @@ pub fn process_samples(
                 // Error handling remains the same
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
-                    error!("Microphone channel disconnected");
+                    // This could be because there's no microphone device
+                    info!("Microphone channel disconnected - no microphone data will be included");
                     microphone_disconnected = true;
+                    
+                    // If we're supposed to be mixing, update the AudioMixer to not wait for mic data
+                    if let Some(mixer) = &mut audio_mixer {
+                        if capture_audio && capture_microphone {
+                            info!("Updating AudioMixer to no longer wait for microphone samples");
+                            mixer.set_both_sources_active(false);
+                        }
+                    }
                 }
             }
         }

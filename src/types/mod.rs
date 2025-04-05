@@ -1,19 +1,23 @@
+use log::{debug, error, info, trace};
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::collections::{VecDeque, HashMap};
-use log::{debug, trace, info, error};
 use windows::core::{ComInterface, Result};
-use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
-use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::Win32::Graphics::Dxgi::IDXGISurface;
-use windows::Win32::Media::MediaFoundation::{IMFSample, IMFSinkWriter, MFCreateSample, MFCreateDXGISurfaceBuffer};
 use windows::Win32::Foundation::TRUE;
+use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+use windows::Win32::Graphics::Dxgi::IDXGISurface;
+use windows::Win32::Media::MediaFoundation::{
+    IMFSample, IMFSinkWriter, MFCreateDXGISurfaceBuffer, MFCreateSample,
+};
 pub mod safe_wrapper;
+pub mod texture_pool;
+
+// Re-export TexturePool
+pub use texture_pool::TexturePool;
 
 /// A wrapper for IMFSample that can be sent between threads
 pub struct SendableSample {
     pub sample: Arc<IMFSample>,
-    texture_ptr: Option<usize>,
     pool: Option<Arc<SamplePool>>,
 }
 
@@ -22,21 +26,17 @@ impl SendableSample {
     pub fn new(sample: IMFSample) -> Self {
         Self {
             sample: Arc::new(sample),
-            texture_ptr: None,
             pool: None,
         }
     }
-    
+
     /// Create a new SendableSample with pool tracking for auto-return
-    pub fn new_pooled(sample: IMFSample, texture: &ID3D11Texture2D, pool: Arc<SamplePool>) -> Self {
-        let texture_ptr = texture as *const _ as usize;
-        
+    pub fn new_pooled(sample: IMFSample, pool: Arc<SamplePool>) -> Self {
         #[cfg(debug_assertions)]
-        trace!("Creating pooled SendableSample for texture {:p}", texture as *const _);
-        
+        trace!("Creating pooled SendableSample");
+
         Self {
             sample: Arc::new(sample),
-            texture_ptr: Some(texture_ptr),
             pool: Some(pool),
         }
     }
@@ -44,7 +44,7 @@ impl SendableSample {
 
 impl std::ops::Deref for SendableSample {
     type Target = Arc<IMFSample>;
-    
+
     fn deref(&self) -> &Self::Target {
         &self.sample
     }
@@ -57,43 +57,41 @@ unsafe impl Sync for SendableSample {}
 /// When SendableSample is dropped, return the sample to the pool if it was pooled
 impl Drop for SendableSample {
     fn drop(&mut self) {
-        if let (Some(pool), Some(texture_ptr)) = (&self.pool, self.texture_ptr) {
+        if let Some(pool) = &self.pool {
             // Only return to pool if we're the last reference to this sample
             if Arc::strong_count(&self.sample) == 1 {
                 // Create local copies to avoid borrowing issues in the closure
-                let texture_ptr_copy = texture_ptr;
                 let pool_clone = pool.clone();
-                
                 let sample_clone = self.sample.as_ref().clone();
-                
+
                 // Use a thread-local to track whether we're already inside a drop to prevent cycles
                 thread_local! {
                     static IN_DROP: std::cell::RefCell<bool> = std::cell::RefCell::new(false);
                 }
-                
+
                 IN_DROP.with(|in_drop| {
                     let already_dropping = *in_drop.borrow();
                     if !already_dropping {
                         *in_drop.borrow_mut() = true;
-                        
+
                         // Return the sample to the pool
-                        unsafe { 
-                            if let Err(e) = pool_clone.release_no_texture(texture_ptr_copy, sample_clone) {
-                                error!("Failed to return sample to pool: {:?}", e);
-                            } else {
-                                trace!("Successfully returned sample for texture {:p} to pool", 
-                                      texture_ptr_copy as *const ID3D11Texture2D);
-                            }
+                        if let Err(e) = pool_clone.release_sample(sample_clone) {
+                            error!("Failed to return sample to pool: {:?}", e);
+                        } else {
+                            #[cfg(debug_assertions)]
+                            trace!("Successfully returned sample to pool");
                         }
-                        
+
                         *in_drop.borrow_mut() = false;
                     }
                 });
             } else if cfg!(debug_assertions) {
                 // Only log in debug mode and at a reasonable rate
                 if Arc::strong_count(&self.sample) % 100 == 0 {
-                    trace!("Not releasing sample to pool - {} references remaining", 
-                          Arc::strong_count(&self.sample) - 1);
+                    trace!(
+                        "Not releasing sample to pool - {} references remaining",
+                        Arc::strong_count(&self.sample) - 1
+                    );
                 }
             }
         }
@@ -105,33 +103,13 @@ pub struct SendableWriter(pub Arc<IMFSinkWriter>);
 unsafe impl Send for SendableWriter {}
 unsafe impl Sync for SendableWriter {}
 
-/// A thread-safe pool of reusable D3D11 textures
-pub struct TexturePool {
-    textures: Mutex<Vec<ID3D11Texture2D>>,
-    device: Arc<ID3D11Device>,
-    width: u32,
-    height: u32,
-    format: DXGI_FORMAT,
-    usage: u32,
-    bind_flags: u32,
-    cpu_access: u32,
-    misc_flags: u32,
-    // Tracking for debug purposes
-    #[cfg(debug_assertions)]
-    created_count: std::sync::atomic::AtomicU32,
-    #[cfg(debug_assertions)]
-    acquired_count: std::sync::atomic::AtomicU32,
-    #[cfg(debug_assertions)]
-    released_count: std::sync::atomic::AtomicU32,
-}
-
-/// A thread-safe pool that manages texture-to-sample bindings
-/// This maintains a mapping between texture pointers and IMFSample objects
+/// A thread-safe pool of reusable IMFSample objects
+/// This maintains a simple pool of IMFSample objects that can be used with any texture
 pub struct SamplePool {
-    /// Mutex-protected map of texture pointers to available IMFSample objects
-    samples: Mutex<HashMap<usize, Vec<IMFSample>>>,
+    /// Mutex-protected vector of available IMFSample objects
+    samples: Mutex<Vec<IMFSample>>,
     /// FPS value used for sample duration
-    fps_num: u32,
+    pub fps_num: u32,
     // Tracking for debug purposes
     #[cfg(debug_assertions)]
     created_count: std::sync::atomic::AtomicU32,
@@ -139,161 +117,15 @@ pub struct SamplePool {
     acquired_count: std::sync::atomic::AtomicU32,
     #[cfg(debug_assertions)]
     released_count: std::sync::atomic::AtomicU32,
-}
-
-impl TexturePool {
-    /// Create a new texture pool with the specified parameters
-    pub fn new(
-        device: Arc<ID3D11Device>,
-        capacity: usize,
-        width: u32,
-        height: u32,
-        format: DXGI_FORMAT,
-        usage: u32,
-        bind_flags: u32,
-        cpu_access: u32,
-        misc_flags: u32,
-    ) -> Result<Self> {
-        let mut textures = Vec::with_capacity(capacity);
-        
-        // Pre-allocate textures
-        for i in 0..capacity {
-            let texture = unsafe { Self::create_texture(
-                &device, width, height, format, usage, bind_flags, cpu_access, misc_flags
-            )? };
-            
-            #[cfg(debug_assertions)]
-            debug!("TexturePool: Created initial texture #{} at {:p}", i, &texture as *const _);
-            
-            textures.push(texture);
-        }
-        
-        info!("TexturePool initialized with {} textures of {}x{}", capacity, width, height);
-        
-        Ok(Self {
-            textures: Mutex::new(textures),
-            device,
-            width,
-            height,
-            format,
-            usage,
-            bind_flags,
-            cpu_access,
-            misc_flags,
-            #[cfg(debug_assertions)]
-            created_count: std::sync::atomic::AtomicU32::new(capacity as u32),
-            #[cfg(debug_assertions)]
-            acquired_count: std::sync::atomic::AtomicU32::new(0),
-            #[cfg(debug_assertions)]
-            released_count: std::sync::atomic::AtomicU32::new(0),
-        })
-    }
-    
-    /// Acquire a texture from the pool or create a new one if the pool is empty
-    pub fn acquire(&self) -> Result<ID3D11Texture2D> {
-        let mut textures = self.textures.lock().unwrap();
-        
-        let texture = if let Some(texture) = textures.pop() {
-            #[cfg(debug_assertions)]
-            trace!("TexturePool: Reusing texture from pool at {:p}", &texture as *const _);
-            texture
-        } else {
-            // If pool is empty, create a new texture
-            #[cfg(debug_assertions)]
-            debug!("TexturePool depleted, creating new texture");
-            
-            let texture = unsafe { Self::create_texture(
-                &self.device, self.width, self.height, self.format, 
-                self.usage, self.bind_flags, self.cpu_access, self.misc_flags
-            )? };
-            
-            #[cfg(debug_assertions)] {
-                self.created_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                debug!("TexturePool: Created new texture at {:p}", &texture as *const _);
-            }
-            
-            texture
-        };
-        
-        #[cfg(debug_assertions)]
-        {
-            let acquired = self.acquired_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let created = self.created_count.load(std::sync::atomic::Ordering::SeqCst);
-            let released = self.released_count.load(std::sync::atomic::Ordering::SeqCst);
-            let active = acquired - released + 1;
-            
-            if active % 30 == 0 { // Log every 30 frames to avoid excessive logging
-                info!("TexturePool stats - created: {}, acquired: {}, released: {}, active: {}", 
-                      created, acquired + 1, released, active);
-            }
-        }
-        
-        Ok(texture)
-    }
-    
-    /// Return a texture to the pool for reuse
-    pub fn release(&self, texture: ID3D11Texture2D) {
-        #[cfg(debug_assertions)]
-        trace!("TexturePool: Returning texture to pool at {:p}", &texture as *const _);
-        
-        let mut textures = self.textures.lock().unwrap();
-        textures.push(texture);
-        
-        #[cfg(debug_assertions)] {
-            self.released_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let acquired = self.acquired_count.load(std::sync::atomic::Ordering::SeqCst);
-            let released = self.released_count.load(std::sync::atomic::Ordering::SeqCst);
-            let active = acquired - released;
-            
-            if active % 30 == 0 || active <= 0 { // Log every 30 frames or when pool is empty
-                debug!("TexturePool: After release - {} textures still active", active);
-            }
-        }
-    }
-    
-    /// Create a new texture with the specified parameters
-    unsafe fn create_texture(
-        device: &ID3D11Device,
-        width: u32,
-        height: u32,
-        format: DXGI_FORMAT,
-        usage: u32,
-        bind_flags: u32,
-        cpu_access: u32,
-        misc_flags: u32,
-    ) -> Result<ID3D11Texture2D> {
-        use windows::Win32::Graphics::Direct3D11::*;
-        
-        let desc = D3D11_TEXTURE2D_DESC {
-            Width: width,
-            Height: height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: format,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE(usage as i32),
-            BindFlags: D3D11_BIND_FLAG(bind_flags as i32),
-            CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(cpu_access as i32),
-            MiscFlags: D3D11_RESOURCE_MISC_FLAG(misc_flags as i32),
-        };
-        
-        let mut texture = None;
-        device.CreateTexture2D(&desc, None, Some(&mut texture))?;
-        
-        Ok(texture.unwrap())
-    }
 }
 
 impl SamplePool {
     /// Create a new sample pool
     pub fn new(fps_num: u32, initial_capacity: usize) -> Self {
         info!("Initializing SamplePool with FPS: {}", fps_num);
-        
+
         Self {
-            samples: Mutex::new(HashMap::with_capacity(initial_capacity)),
+            samples: Mutex::new(Vec::with_capacity(initial_capacity)),
             fps_num,
             #[cfg(debug_assertions)]
             created_count: std::sync::atomic::AtomicU32::new(0),
@@ -303,110 +135,91 @@ impl SamplePool {
             released_count: std::sync::atomic::AtomicU32::new(0),
         }
     }
-    
-    /// Get a unique ID for a texture to use as a hash key
-    fn get_texture_id(texture: &ID3D11Texture2D) -> usize {
-        texture as *const _ as usize
-    }
-    
-    /// Create a new Media Foundation sample from a texture
-    unsafe fn create_sample_for_texture(texture: &ID3D11Texture2D, fps_num: u32) -> Result<IMFSample> {
-        // Cast the texture to an IDXGISurface
-        let surface: IDXGISurface = texture.cast()?;
-        
-        // Create a new Media Foundation sample
-        let sample: IMFSample = MFCreateSample()?;
-        
-        // Create a DXGI buffer from the surface
-        let buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &surface, 0, TRUE)?;
-        
-        // Add the buffer to the sample
-        sample.AddBuffer(&buffer)?;
-        
-        // Set the sample duration based on the frame rate
-        sample.SetSampleDuration(10_000_000 / fps_num as i64)?;
-        
-        // Explicitly release the surface to avoid a reference leak
-        // The buffer still maintains its reference to the underlying resource
-        drop(surface);
-        
-        Ok(sample)
-    }
-    
-    /// Acquire or create a sample for the given texture
-    pub unsafe fn acquire_for_texture(&self, texture: &ID3D11Texture2D) -> Result<IMFSample> {
-        let texture_id = Self::get_texture_id(texture);
-        let mut samples_map = self.samples.lock().unwrap();
-        
-        // Get or create the entry for this texture
-        let samples_for_texture = samples_map.entry(texture_id).or_insert_with(Vec::new);
-        
-        let sample = if let Some(sample) = samples_for_texture.pop() {
+
+    /// Acquire a sample from the pool or create a new one if the pool is empty
+    pub fn acquire_sample(&self) -> Result<IMFSample> {
+        let mut samples = self.samples.lock().unwrap();
+
+        let sample = if let Some(sample) = samples.pop() {
             #[cfg(debug_assertions)]
-            trace!("SamplePool: Reusing sample for texture {:p}", texture as *const _);
+            trace!("SamplePool: Reusing sample from pool");
             sample
         } else {
-            // No existing sample for this texture, create a new one
+            // If pool is empty, create a new empty sample
             #[cfg(debug_assertions)]
-            debug!("SamplePool: Creating new sample for texture {:p}", texture as *const _);
-            
-            let sample = Self::create_sample_for_texture(texture, self.fps_num)?;
-            
-            #[cfg(debug_assertions)] {
-                self.created_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            debug!("SamplePool: Creating new sample");
+
+            // Create a new Media Foundation sample
+            let sample: IMFSample = unsafe { MFCreateSample() }?;
+
+            #[cfg(debug_assertions)]
+            {
+                self.created_count
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
-            
+
             sample
         };
-        
+
         #[cfg(debug_assertions)]
         {
-            let acquired = self.acquired_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let acquired = self
+                .acquired_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let created = self.created_count.load(std::sync::atomic::Ordering::SeqCst);
-            let released = self.released_count.load(std::sync::atomic::Ordering::SeqCst);
+            let released = self
+                .released_count
+                .load(std::sync::atomic::Ordering::SeqCst);
             let active = acquired - released + 1;
-            
-            // Only log at larger intervals and avoid logging consecutive frames
-            // Use acquired count as a throttle to avoid rapid consecutive logs
+
+            // Only log at larger intervals
             if acquired % 300 == 0 {
-                info!("SamplePool stats - created: {}, acquired: {}, released: {}, active: {}", 
-                      created, acquired + 1, released, active);
+                info!(
+                    "SamplePool stats - created: {}, acquired: {}, released: {}, active: {}",
+                    created,
+                    acquired + 1,
+                    released,
+                    active
+                );
             }
         }
-        
+
         Ok(sample)
     }
-    
-    /// Return a sample to the pool for reuse with the same texture
-    pub unsafe fn release_sample(&self, texture: &ID3D11Texture2D, sample: IMFSample) -> Result<()> {
-        let texture_id = Self::get_texture_id(texture);
-        self.release_no_texture(texture_id, sample)
-    }
-    
-    /// Return a sample to the pool using just the texture ID
-    /// This is used by SendableSample's Drop implementation
-    pub unsafe fn release_no_texture(&self, texture_id: usize, sample: IMFSample) -> Result<()> {
+
+    /// Return a sample to the pool for reuse
+    pub fn release_sample(&self, sample: IMFSample) -> Result<()> {
         #[cfg(debug_assertions)]
-        trace!("SamplePool: Returning sample for texture ID {} to pool", texture_id);
-        
-        let mut samples_map = self.samples.lock().unwrap();
-        let samples_for_texture = samples_map.entry(texture_id).or_insert_with(Vec::new);
-        samples_for_texture.push(sample);
-        
-        #[cfg(debug_assertions)] {
-            let released = self.released_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            
+        trace!("SamplePool: Returning sample to pool");
+
+        // Clear all buffers from the sample before returning it to the pool
+        unsafe { sample.RemoveAllBuffers()? };
+
+        let mut samples = self.samples.lock().unwrap();
+        samples.push(sample);
+
+        #[cfg(debug_assertions)]
+        {
+            let released = self
+                .released_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
             // Only log occasionally to avoid spamming
             if released % 300 == 0 {
-                let acquired = self.acquired_count.load(std::sync::atomic::Ordering::SeqCst);
+                let acquired = self
+                    .acquired_count
+                    .load(std::sync::atomic::Ordering::SeqCst);
                 let active = acquired - (released + 1);
-                debug!("SamplePool: After release - {} samples still active", active);
+                debug!(
+                    "SamplePool: After release - {} samples still active",
+                    active
+                );
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Set the timestamp for a sample
     pub unsafe fn set_sample_time(&self, sample: &IMFSample, frame_count: u64) -> Result<()> {
         let frame_time = (frame_count as i64 * 10_000_000i64 / self.fps_num as i64) as i64;
@@ -491,8 +304,15 @@ pub struct ReplayBuffer {
 
 impl ReplayBuffer {
     /// Create a new replay buffer with a specified duration
-    pub fn new(max_duration: Duration, initial_video_limit: usize, initial_audio_limit: usize) -> Self {
-        info!("Creating replay buffer with max duration of {:?}", max_duration);
+    pub fn new(
+        max_duration: Duration,
+        initial_video_limit: usize,
+        initial_audio_limit: usize,
+    ) -> Self {
+        info!(
+            "Creating replay buffer with max duration of {:?}",
+            max_duration
+        );
         Self {
             max_duration,
             video_samples: Mutex::new(VecDeque::with_capacity(initial_video_limit)),
@@ -507,45 +327,49 @@ impl ReplayBuffer {
     /// Add a video sample to the buffer
     pub fn add_video_sample(&self, sample: SendableSample, timestamp: i64) -> Result<()> {
         let mut samples = self.video_samples.lock().unwrap();
-        
+
         // Add new sample
         samples.push_back((sample, timestamp));
-        
+
         // Update oldest timestamp if this is the only sample
         if samples.len() == 1 {
             let mut oldest = self.oldest_timestamp.lock().unwrap();
             *oldest = timestamp;
         }
-        
+
         // Remove old samples if we exceed the limit
         self.trim_buffer(&mut samples, timestamp)?;
-        
+
         Ok(())
     }
 
     /// Add an audio sample to the buffer
     pub fn add_audio_sample(&self, sample: SendableSample, timestamp: i64) -> Result<()> {
         let mut samples = self.audio_samples.lock().unwrap();
-        
+
         // Add new sample
         samples.push_back((sample, timestamp));
-        
+
         // Update oldest timestamp if needed
         if timestamp < *self.oldest_timestamp.lock().unwrap() {
             let mut oldest = self.oldest_timestamp.lock().unwrap();
             *oldest = timestamp;
         }
-        
+
         // Remove old samples if we exceed the limit
         self.trim_buffer(&mut samples, timestamp)?;
-        
+
         Ok(())
     }
 
     /// Remove samples that are too old
-    fn trim_buffer(&self, samples: &mut VecDeque<(SendableSample, i64)>, latest_timestamp: i64) -> Result<()> {
+    fn trim_buffer(
+        &self,
+        samples: &mut VecDeque<(SendableSample, i64)>,
+        latest_timestamp: i64,
+    ) -> Result<()> {
         let cutoff_timestamp = latest_timestamp - duration_to_hns(self.max_duration);
-        
+
         // Remove samples older than the cutoff
         while let Some((_, timestamp)) = samples.front() {
             if *timestamp < cutoff_timestamp {
@@ -554,7 +378,7 @@ impl ReplayBuffer {
                 break;
             }
         }
-        
+
         // Update oldest timestamp
         if samples.is_empty() {
             let mut oldest = self.oldest_timestamp.lock().unwrap();
@@ -563,7 +387,7 @@ impl ReplayBuffer {
             let mut oldest = self.oldest_timestamp.lock().unwrap();
             *oldest = *timestamp;
         }
-        
+
         Ok(())
     }
 
@@ -601,26 +425,26 @@ impl ReplayBuffer {
     pub fn current_duration(&self) -> Duration {
         let video_samples = self.video_samples.lock().unwrap();
         let audio_samples = self.audio_samples.lock().unwrap();
-        
+
         if video_samples.is_empty() && audio_samples.is_empty() {
             return Duration::from_secs(0);
         }
-        
+
         let mut latest_timestamp = 0;
         let oldest_timestamp = *self.oldest_timestamp.lock().unwrap();
-        
+
         // Find the latest timestamp from video samples
         if let Some((_, timestamp)) = video_samples.back() {
             latest_timestamp = *timestamp;
         }
-        
+
         // Check if the latest audio timestamp is newer
         if let Some((_, timestamp)) = audio_samples.back() {
             if *timestamp > latest_timestamp {
                 latest_timestamp = *timestamp;
             }
         }
-        
+
         // Convert the difference to duration
         hns_to_duration(latest_timestamp - oldest_timestamp)
     }
@@ -630,11 +454,11 @@ impl ReplayBuffer {
         let mut video_samples = self.video_samples.lock().unwrap();
         let mut audio_samples = self.audio_samples.lock().unwrap();
         let mut size_bytes = self.size_bytes.lock().unwrap();
-        
+
         video_samples.clear();
         audio_samples.clear();
         *size_bytes = 0;
-        
+
         debug!("Replay buffer cleared");
     }
 }

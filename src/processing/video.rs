@@ -259,12 +259,16 @@ pub unsafe fn convert_bgra_to_nv12(
     sample: &IMFSample,
     output_width: u32,
     output_height: u32,
+    texture_pool: &crate::types::TexturePool,
 ) -> Result<IMFSample> {
     let duration = sample.GetSampleDuration()?;
     let time = sample.GetSampleTime()?;
 
-    // Create NV12 texture and output sample
-    let (nv12_texture, output_sample) = create_nv12_output(device, output_width, output_height)?;
+    // Get the conversion texture from the pool
+    let nv12_texture = texture_pool.get_conversion_texture()?;
+
+    // Create output sample from the texture
+    let output_sample = create_output_sample_from_texture(&nv12_texture)?;
 
     // Process the frame
     converter.ProcessInput(0, sample, 0)?;
@@ -304,18 +308,18 @@ pub unsafe fn convert_bgra_to_nv12(
                 drop(s);
             }
             ManuallyDrop::drop(&mut output_buffers[0].pEvents);
-            drop(nv12_texture); // Also drop the texture
+            // No need to drop the texture explicitly as it's from the pool
             return Err(e); // Propagate the error code
         }
         Err(e) => {
             // Other errors
             warn!("ProcessOutput failed: {:?}", e);
-            // Clean up the allocated sample and texture
+            // Clean up the allocated sample
             if let Some(s) = ManuallyDrop::take(&mut output_buffers[0].pSample) {
                 drop(s);
             }
             ManuallyDrop::drop(&mut output_buffers[0].pEvents);
-            drop(nv12_texture); // Also drop the texture
+            // No need to drop the texture explicitly as it's from the pool
 
             // Check for device removal
             device.GetDeviceRemovedReason()?; // This will return the error if device removed
@@ -327,75 +331,35 @@ pub unsafe fn convert_bgra_to_nv12(
     final_sample.SetSampleTime(time)?;
     final_sample.SetSampleDuration(duration)?;
 
-    // Release the texture explicitly as the sample holds a ref via the buffer
-    // We don't need our original handle to it anymore.
-    drop(nv12_texture);
+    // No need to drop the texture explicitly as it's from the pool
+    // The texture will be reused for the next frame
 
     Ok(final_sample)
 }
 
-// --- create_nv12_output remains unchanged ---
-unsafe fn create_nv12_output(
-    device: &ID3D11Device,
-    output_width: u32,
-    output_height: u32,
-) -> Result<(ID3D11Texture2D, IMFSample)> {
-    use windows::Win32::Graphics::Direct3D11::*;
-    use windows::Win32::Graphics::Dxgi::Common::*;
-
-    // Create NV12 texture with optimized flags
-    let nv12_desc = D3D11_TEXTURE2D_DESC {
-        Width: output_width,
-        Height: output_height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: DXGI_FORMAT_NV12,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
-        CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(0),
-        MiscFlags: D3D11_RESOURCE_MISC_FLAG(0), // No flags needed generally
-    };
-
-    let mut nv12_texture = None;
-    device.CreateTexture2D(&nv12_desc, None, Some(&mut nv12_texture))?;
-    let nv12_texture = nv12_texture.unwrap();
+/// Create an IMFSample from an existing texture
+unsafe fn create_output_sample_from_texture(texture: &ID3D11Texture2D) -> Result<IMFSample> {
+    use windows::Win32::Foundation::FALSE;
+    use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+    use windows::Win32::Graphics::Dxgi::IDXGISurface;
+    use windows::Win32::Media::MediaFoundation::{MFCreateDXGISurfaceBuffer, MFCreateSample};
 
     // Create output sample
     let output_sample: IMFSample = MFCreateSample()?;
 
     // Cast the texture to IDXGISurface
-    let nv12_surface: IDXGISurface = nv12_texture.cast()?;
+    let surface: IDXGISurface = texture.cast()?;
 
     // Create a buffer from the DXGI surface
-    // MFCreateDXGISurfaceBuffer takes REFIID, IUnknown*, UINT, BOOL
-    let output_buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &nv12_surface, 0, FALSE)?;
+    let output_buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &surface, 0, FALSE)?;
 
     // Add the buffer to the sample. The sample now holds a reference to the buffer (and thus the surface/texture)
     output_sample.AddBuffer(&output_buffer)?;
 
     // Explicitly release the surface and buffer references obtained here,
     // as the sample holds its own reference now.
-    // Using `drop` is the idiomatic Rust way.
-    drop(nv12_surface);
+    drop(surface);
     drop(output_buffer);
 
-    Ok((nv12_texture, output_sample)) // Return the texture handle too, might be useful elsewhere temporarily
-}
-
-// --- flush_converter remains unchanged ---
-pub unsafe fn flush_converter(converter: &IMFTransform) -> Result<()> {
-    info!("Flushing video converter");
-    // Send flush command
-    converter.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
-    // After flush, MFT might require specific commands before processing again,
-    // like NOTIFY_BEGIN_STREAMING or NOTIFY_START_OF_STREAM.
-    // Drain is usually for signaling end-of-stream, not typically needed after flush.
-    // Let's remove drain unless specifically needed.
-    // converter.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
-    info!("Video converter flushed");
-    Ok(())
+    Ok(output_sample)
 }

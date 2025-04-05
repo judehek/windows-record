@@ -146,8 +146,6 @@ unsafe fn create_sink_attributes() -> Result<Option<IMFAttributes>> {
     if let Some(attrs) = &attributes {
         info!("create_sink_attributes - Setting MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS to 1");
         attrs.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
-        info!("create_sink_attributes - Setting MF_SINK_WRITER_DISABLE_THROTTLING to 1");
-        attrs.SetUINT32(&MF_SINK_WRITER_DISABLE_THROTTLING, 1)?;
         info!("create_sink_attributes - All attributes set successfully");
     } else {
         info!("create_sink_attributes - Attributes object is None, skipping settings");
@@ -364,9 +362,6 @@ unsafe fn create_encoder_config(video_bitrate: u32) -> Result<Option<IMFAttribut
         info!("create_encoder_config - Setting CODECAPI_AVEncMPVDefaultBPictureCount to 0");
         attrs.SetUINT32(&CODECAPI_AVEncMPVDefaultBPictureCount, 0)?;
 
-        info!("create_encoder_config - Setting CODECAPI_AVEncCommonQuality to 70");
-        attrs.SetUINT32(&CODECAPI_AVEncCommonQuality, 70)?;
-
         info!("create_encoder_config - Setting CODECAPI_AVEncCommonLowLatency to 1");
         attrs.SetUINT32(&CODECAPI_AVEncCommonLowLatency, 1)?;
 
@@ -407,8 +402,6 @@ unsafe fn create_audio_output_type() -> Result<IMFMediaType> {
     info!("create_audio_output_type - Completed successfully");
     Ok(output_type)
 }
-
-// The create_dxgi_sample function has been moved to SamplePool in types/mod.rs
 
 pub unsafe fn init_media_foundation() -> Result<()> {
     info!("init_media_foundation - Starting");

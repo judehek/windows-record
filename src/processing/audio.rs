@@ -19,8 +19,8 @@ pub struct AudioMixer {
 
 impl AudioMixer {
     pub fn new(sample_rate: u32, bits_per_sample: u16, channels: u16, both_sources_active: bool) -> Self {
-        info!("Creating AudioMixer: sample_rate={}, bits_per_sample={}, channels={}", 
-              sample_rate, bits_per_sample, channels);
+        info!("Creating AudioMixer: sample_rate={}, bits_per_sample={}, channels={}, both_sources={}", 
+              sample_rate, bits_per_sample, channels, both_sources_active);
         Self {
             system_audio_queue: VecDeque::new(),
             microphone_queue: VecDeque::new(),
@@ -30,6 +30,15 @@ impl AudioMixer {
             system_volume: 1.0,
             microphone_volume: 1.0,
             both_sources_active,
+        }
+    }
+    
+    // Allow dynamically changing whether both sources are required
+    pub fn set_both_sources_active(&mut self, both_active: bool) {
+        if self.both_sources_active != both_active {
+            info!("Changing AudioMixer mixing mode - both_sources_active: {} -> {}", 
+                  self.both_sources_active, both_active);
+            self.both_sources_active = both_active;
         }
     }
 

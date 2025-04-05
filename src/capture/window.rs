@@ -1,7 +1,9 @@
+use log::{debug, info, trace, warn};
 use std::sync::atomic::{AtomicIsize, Ordering};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
-use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextW, IsWindow, IsWindowVisible, GetWindowRect};
-use log::{debug, info, trace, warn};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetClientRect, GetWindowRect, GetWindowTextW, IsWindow, IsWindowVisible,
+};
 
 /// Defines how window titles should be matched
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +39,10 @@ pub fn get_window_by_exact_string(search_string: &str) -> Option<HWND> {
 }
 
 /// Gets a window handle by searching for windows with titles matching the given string and options
-pub fn get_window_by_string_with_options(search_string: &str, match_type: WindowMatchType) -> Option<HWND> {
+pub fn get_window_by_string_with_options(
+    search_string: &str,
+    match_type: WindowMatchType,
+) -> Option<HWND> {
     let search_str = match match_type {
         WindowMatchType::Substring => search_string.to_lowercase(),
         WindowMatchType::ExactMatch => search_string.to_string(),
@@ -58,11 +63,18 @@ pub fn get_window_by_string_with_options(search_string: &str, match_type: Window
 
     let hwnd_value = context.result.load(Ordering::Relaxed);
     if hwnd_value == 0 {
-        debug!("No window found matching '{}' with {:?}", search_string, match_type);
+        debug!(
+            "No window found matching '{}' with {:?}",
+            search_string, match_type
+        );
         None
     } else {
-        debug!("Found window matching '{}' with {:?} at handle {:?}", 
-               search_string, match_type, HWND(hwnd_value));
+        debug!(
+            "Found window matching '{}' with {:?} at handle {:?}",
+            search_string,
+            match_type,
+            HWND(hwnd_value)
+        );
         Some(HWND(hwnd_value))
     }
 }
@@ -98,22 +110,47 @@ pub fn get_window_title(hwnd: HWND) -> String {
 /// Gets the window position and size
 pub fn get_window_rect(hwnd: HWND) -> Option<(i32, i32, u32, u32)> {
     unsafe {
-        let mut rect = RECT::default();
-        if GetWindowRect(hwnd, &mut rect).as_bool() {
-            let width = (rect.right - rect.left) as u32;
-            let height = (rect.bottom - rect.top) as u32;
-            
+        let mut client_rect = RECT::default();
+        let mut window_rect = RECT::default();
+
+        // Get both the client rect and window rect
+        if GetClientRect(hwnd, &mut client_rect).as_bool()
+            && GetWindowRect(hwnd, &mut window_rect).as_bool()
+        {
+            // Use the client area dimensions (what your app expects)
+            let width = (client_rect.right - client_rect.left) as u32;
+            let height = (client_rect.bottom - client_rect.top) as u32;
+
+            // But keep the window position from the window rect
+            let left = window_rect.left;
+            let top = window_rect.top;
+
             // Get window title for better logging
             let title = get_window_title(hwnd);
-            let title_str = if title.is_empty() { "<Unnamed>" } else { &title };
-            
-            info!("Window '{}' rect: [{}, {}, {}, {}] - {}x{}", 
-                title_str, rect.left, rect.top, rect.right, rect.bottom, width, height);
-                
-            Some((rect.left, rect.top, width, height))
+            let title_str = if title.is_empty() {
+                "<Unnamed>"
+            } else {
+                &title
+            };
+
+            info!(
+                "Window '{}' rect: [{}, {}, {}, {}] - {}x{}",
+                title_str,
+                left,
+                top,
+                left + width as i32,
+                top + height as i32,
+                width,
+                height
+            );
+
+            Some((left, top, width, height))
         } else {
             let error_code = windows::Win32::Foundation::GetLastError();
-            warn!("Failed to get window rect for hwnd: {:?}, error: {:?}", hwnd, error_code);
+            warn!(
+                "Failed to get window rect for hwnd: {:?}, error: {:?}",
+                hwnd, error_code
+            );
             None
         }
     }
@@ -121,38 +158,36 @@ pub fn get_window_rect(hwnd: HWND) -> Option<(i32, i32, u32, u32)> {
 
 unsafe extern "system" fn window_enumeration_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let context = &*(lparam.0 as *const SearchContext);
-    
+
     // Skip windows that aren't visible
     if !IsWindowVisible(hwnd).as_bool() {
         return BOOL(1); // Continue enumeration
     }
-    
+
     let mut text: [u16; 512] = [0; 512];
     let length = GetWindowTextW(hwnd, &mut text);
-    
+
     let window_text = match context.match_type {
         WindowMatchType::Substring => {
             String::from_utf16_lossy(&text[..length as usize]).to_lowercase()
-        },
-        WindowMatchType::ExactMatch => {
-            String::from_utf16_lossy(&text[..length as usize])
-        },
+        }
+        WindowMatchType::ExactMatch => String::from_utf16_lossy(&text[..length as usize]),
     };
-    
+
     // Print both strings for debugging
     if context.match_type == WindowMatchType::ExactMatch {
-        log::debug!("Exact matching: '{}' vs '{}'", window_text, context.search_string);
+        log::debug!(
+            "Exact matching: '{}' vs '{}'",
+            window_text,
+            context.search_string
+        );
     }
-    
+
     let is_match = match context.match_type {
-        WindowMatchType::Substring => {
-            window_text.contains(&context.search_string)
-        },
-        WindowMatchType::ExactMatch => {
-            window_text == context.search_string
-        },
+        WindowMatchType::Substring => window_text.contains(&context.search_string),
+        WindowMatchType::ExactMatch => window_text == context.search_string,
     };
-    
+
     if is_match {
         trace!("Found matching window: '{}'", window_text);
         context.result.store(hwnd.0, Ordering::Relaxed);
