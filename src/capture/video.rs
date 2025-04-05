@@ -13,9 +13,8 @@ use windows::Win32::Media::MediaFoundation::MFCreateDXGISurfaceBuffer;
 use windows::Win32::System::Threading::*;
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
-use super::dxgi::{create_blank_dxgi_texture, setup_dxgi_duplication};
+use super::dxgi::setup_dxgi_duplication;
 use super::window::{get_window_rect, get_window_title, is_window_valid};
-use crate::capture::dxgi::create_staging_texture;
 use crate::types::{SamplePool, SendableSample, TexturePool};
 
 /// Struct to manage window target state
