@@ -839,31 +839,21 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     
     info!("Found {} graphics adapters", adapters.len());
     
-    // Try to create device with debug layer first using the default adapter
-    info!("Attempting to create D3D11 device with current flags");
-    let result = D3D11CreateDevice(
-        None,
-        D3D_DRIVER_TYPE_HARDWARE,
-        None,
-        flags,
-        Some(&feature_levels),
-        D3D11_SDK_VERSION,
-        Some(&mut device),
-        None,
-        Some(&mut context),
-    );
-
-    // If debug layer is not available, retry without it
-    if let Err(e) = result {
-        info!("D3D11 device creation failed with error: {:?}", e);
-        if e.code() == windows::Win32::Graphics::Dxgi::DXGI_ERROR_SDK_COMPONENT_MISSING {
-            info!("Debug layer not available, falling back to non-debug creation");
-            flags &= !D3D11_CREATE_DEVICE_DEBUG;
-            info!("New flags without debug: {:?}", flags);
-            info!("Retrying D3D11 device creation without debug flag");
-            D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
+    // We'll use the first adapter by default if available
+    // Later when capturing we'll select the specific adapter for the window
+    let mut created_successfully = false;
+    
+    if !adapters.is_empty() {
+        info!("Attempting to create D3D11 device with adapter-specific creation");
+        
+        // Start with first adapter (usually the primary GPU)
+        for (idx, adapter) in adapters.iter().enumerate() {
+            info!("Trying to create device with adapter {}", idx);
+            
+            // When using explicit adapter, driver type must be UNKNOWN
+            let result = D3D11CreateDevice(
+                Some(adapter),
+                D3D_DRIVER_TYPE_UNKNOWN, // Must be UNKNOWN when adapter is specified
                 None,
                 flags,
                 Some(&feature_levels),
@@ -871,14 +861,89 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
                 Some(&mut device),
                 None,
                 Some(&mut context),
-            )?;
-            info!("D3D11 device created successfully without debug flag");
-        } else {
-            error!("Failed to create D3D11 device: {:?}", e);
-            return Err(e);
+            );
+            
+            if let Err(e) = result {
+                info!("Failed to create device with adapter {}: {:?}", idx, e);
+                
+                // If it's just the debug layer missing, try without it
+                if e.code() == windows::Win32::Graphics::Dxgi::DXGI_ERROR_SDK_COMPONENT_MISSING && flags.0 & D3D11_CREATE_DEVICE_DEBUG.0 != 0 {
+                    info!("Debug layer not available, trying without debug flag");
+                    let debug_free_flags = D3D11_CREATE_DEVICE_FLAG(flags.0 & !D3D11_CREATE_DEVICE_DEBUG.0);
+                    
+                    let retry_result = D3D11CreateDevice(
+                        Some(adapter),
+                        D3D_DRIVER_TYPE_UNKNOWN,
+                        None,
+                        debug_free_flags,
+                        Some(&feature_levels),
+                        D3D11_SDK_VERSION,
+                        Some(&mut device),
+                        None,
+                        Some(&mut context),
+                    );
+                    
+                    if retry_result.is_ok() {
+                        info!("Successfully created device on adapter {} without debug layer", idx);
+                        created_successfully = true;
+                        break;
+                    } else {
+                        info!("Failed to create device on adapter {} even without debug layer", idx);
+                    }
+                }
+                // Continue to the next adapter
+            } else {
+                info!("Successfully created device on adapter {}", idx);
+                created_successfully = true;
+                break;
+            }
         }
-    } else {
-        info!("D3D11 device created successfully on first attempt");
+    }
+    
+    // Fallback to default adapter creation if adapter-specific approach failed
+    if !created_successfully {
+        info!("Adapter-specific creation failed or no adapters found, falling back to default creation");
+        
+        // Try to create device with debug layer first using the default adapter
+        let result = D3D11CreateDevice(
+            None,
+            D3D_DRIVER_TYPE_HARDWARE,
+            None,
+            flags,
+            Some(&feature_levels),
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            Some(&mut context),
+        );
+
+        // If debug layer is not available, retry without it
+        if let Err(e) = result {
+            info!("D3D11 device creation failed with error: {:?}", e);
+            if e.code() == windows::Win32::Graphics::Dxgi::DXGI_ERROR_SDK_COMPONENT_MISSING {
+                info!("Debug layer not available, falling back to non-debug creation");
+                flags = D3D11_CREATE_DEVICE_FLAG(flags.0 & !D3D11_CREATE_DEVICE_DEBUG.0);
+                info!("New flags without debug: {:?}", flags);
+                info!("Retrying D3D11 device creation without debug flag");
+                D3D11CreateDevice(
+                    None,
+                    D3D_DRIVER_TYPE_HARDWARE,
+                    None,
+                    flags,
+                    Some(&feature_levels),
+                    D3D11_SDK_VERSION,
+                    Some(&mut device),
+                    None,
+                    Some(&mut context),
+                )?;
+                info!("D3D11 device created successfully without debug flag");
+            } else {
+                error!("Failed to create D3D11 device: {:?}", e);
+                return Err(e);
+            }
+        } else {
+            info!("D3D11 device created successfully on first attempt");
+        }
     }
 
     let device = device.unwrap();
