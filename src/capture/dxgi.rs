@@ -1,7 +1,7 @@
-use log::{debug, trace};
+use log::{debug, error, info, trace, warn};
 use windows::core::{ComInterface, Result};
+use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
-use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 
 pub unsafe fn setup_dxgi_duplication(device: &ID3D11Device) -> Result<IDXGIOutputDuplication> {

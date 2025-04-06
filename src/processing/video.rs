@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 use windows::core::{ComInterface, Result};
 use windows::Win32::Foundation::{FALSE, RECT};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
-use windows::Win32::Graphics::Dxgi::IDXGISurface;
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 
