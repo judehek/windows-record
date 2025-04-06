@@ -10,7 +10,8 @@ use windows::Win32::Foundation::{BOOL, HWND, TRUE};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::{
     IDXGIOutputDuplication, IDXGIResource, IDXGISurface, DXGI_ERROR_ACCESS_LOST,
-    DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
+    DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET, DXGI_ERROR_WAIT_TIMEOUT,
+    DXGI_OUTDUPL_FRAME_INFO,
 };
 use windows::Win32::Media::MediaFoundation::MFCreateDXGISurfaceBuffer;
 use windows::Win32::System::Threading::*;
@@ -509,11 +510,9 @@ unsafe fn process_frame(
     sample_pool: &Arc<SamplePool>,
     capture_cursor: bool,
 ) -> std::result::Result<(), FrameError> {
-    // Check focus first
+    // 1. Check Focus & Log Focus Change
     let is_window_focused = window_tracker.is_focused();
-
-    // Log state changes for debugging
-    static mut LAST_FOCUS_STATE: Option<bool> = None;
+    static mut LAST_FOCUS_STATE: Option<bool> = None; // Keep static focus tracking
     let focus_changed = unsafe { LAST_FOCUS_STATE != Some(is_window_focused) };
     if focus_changed {
         info!(
@@ -530,133 +529,172 @@ unsafe fn process_frame(
         }
     }
 
-    // This will hold the texture to be sent (either captured or blank)
+    // Variables to hold results through the steps
     let mut final_texture: Option<ID3D11Texture2D> = None;
-    // Track if the final_texture came from the acquisition pool (needs release)
-    let mut needs_release = false;
-    // Flag to indicate if ReleaseFrame should be called
-    let mut acquired_frame = false;
+    let mut needs_release_to_pool = false; // Track if texture came from acquisition pool
+    let mut acquired_resource_holder: Option<IDXGIResource> = None; // Temp holder for resource
+                                                                    // *** Track if AcquireNextFrame returned Ok(_) ***
+    let mut frame_acquire_returned_ok = false;
+    let mut frame_has_content = false; // Track if AcquireNextFrame returned a valid resource
 
+    // --- Main Logic ---
     if is_window_focused {
-        // --- Focused Path: Acquire and process frame ---
+        // 2. Acquire Frame Attempt
         trace!("Window focused, attempting to acquire frame.");
-        let mut resource: Option<IDXGIResource> = None;
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
+        let acquire_result =
+            duplication.AcquireNextFrame(16, &mut info, &mut acquired_resource_holder);
 
-        // --- Call AcquireNextFrame ---
-        let acquire_result = duplication.AcquireNextFrame(16, &mut info, &mut resource);
-        acquired_frame = acquire_result.is_ok(); // Mark that we attempted acquisition
+        // *** Store Ok status directly ***
+        frame_acquire_returned_ok = acquire_result.is_ok();
 
         match acquire_result {
             Ok(_) => {
-                // Frame acquired (even if resource is None due to timeout)
-                if let Some(acquired_resource) = resource.as_ref() {
-                    // We got a new frame resource
+                // frame_acquire_returned_ok is already true
+                if acquired_resource_holder.is_some() {
                     trace!("Acquired new frame resource.");
-                    let mut context_guard = context_mutex.lock().unwrap();
-
-                    // Get the source texture from the resource
-                    let source_texture: ID3D11Texture2D = acquired_resource.cast()?;
-
-                    // Acquire a texture from the pool for this frame
-                    let pooled_texture =
-                        texture_pool.acquire_acquisition_texture().map_err(|e| {
-                            error!("Failed to acquire texture from pool: {:?}", e);
-                            FrameError::TexturePoolError
-                        })?;
-
-                    // Copy content from source to pooled texture
-                    context_guard.CopyResource(&pooled_texture, &source_texture);
-                    drop(source_texture); // Release COM ptr for source
-
-                    if capture_cursor {
-                        // Drop lock for GDI, then re-acquire
-                        drop(context_guard);
-                        if let Err(e) = draw_cursor_gdi(&pooled_texture) {
-                            debug!("Failed to draw cursor: {:?}", e);
-                        }
-                        // Re-acquire lock (needed?) - maybe not, as drawing is done.
-                        // The texture is ready.
-                        // context_guard = context_mutex.lock().unwrap(); // Re-acquiring might not be needed if no more D3D work
-                    }
-
-                    // Remember this texture for sending and mark for release
-                    final_texture = Some(pooled_texture);
-                    needs_release = true;
-                    // Context lock (if re-acquired) drops here, otherwise already dropped.
+                    frame_has_content = true;
                 } else {
-                    // AcquireNextFrame returned OK, but resource is None (Timeout)
-                    // No new frame available within the timeout.
-                    trace!(
-                        "AcquireNextFrame timed out ({}ms), no new frame resource.",
-                        16
-                    );
-                    // We won't set final_texture, so no frame will be sent for this interval.
-                    // The timing logic later will handle potentially duping frames.
+                    // This is the S_OK + timeout case (resource is None)
+                    trace!("AcquireNextFrame returned S_OK but timed out (resource is None).");
+                    frame_has_content = false;
                 }
-            }
-            Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => {
-                // Explicitly handle timeout error code case if preferred
-                trace!("AcquireNextFrame returned DXGI_ERROR_WAIT_TIMEOUT.");
-                // No new frame available. Don't set final_texture.
-                acquired_frame = true; // Still need to release if AcquireNextFrame was called
-            }
-            Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST => {
-                warn!("DXGI access lost, signaling recreation needed.");
-                // Let the main loop handle recreation by returning the error.
-                // Ensure ReleaseFrame is called if possible before returning.
-                if acquired_frame {
-                    // Best effort release before propagating error
-                    if let Err(release_err) = duplication.ReleaseFrame() {
-                        warn!("Error releasing frame after access lost: {:?}", release_err);
-                    }
-                }
-                return Err(FrameError::WindowsError(e));
             }
             Err(e) => {
-                // Other unexpected DXGI error during acquisition
-                error!("Unexpected error during AcquireNextFrame: {:?}", e);
-                if acquired_frame {
-                    if let Err(release_err) = duplication.ReleaseFrame() {
-                        warn!(
-                            "Error releasing frame after acquisition error: {:?}",
-                            release_err
-                        );
-                    }
+                // frame_acquire_returned_ok is already false
+                let code = e.code();
+                if code == DXGI_ERROR_ACCESS_LOST
+                    || code == DXGI_ERROR_DEVICE_REMOVED
+                    || code == DXGI_ERROR_DEVICE_RESET
+                {
+                    warn!("DXGI access/device lost during AcquireNextFrame ({:?}), signaling recreation needed.", code);
+                    return Err(FrameError::WindowsError(e));
+                } else if code == DXGI_ERROR_WAIT_TIMEOUT {
+                    // Explicitly handle the DXGI_ERROR_WAIT_TIMEOUT *error* case
+                    trace!("AcquireNextFrame returned error: DXGI_ERROR_WAIT_TIMEOUT.");
+                    // frame_acquire_returned_ok remains false
+                    frame_has_content = false;
+                } else {
+                    // Other unexpected errors
+                    error!(
+                        "Unexpected error during AcquireNextFrame: {:?}. Code: {:?}",
+                        e,
+                        e.code()
+                    );
+                    return Err(FrameError::WindowsError(e));
                 }
-                return Err(FrameError::WindowsError(e));
             }
         }
 
-        // --- Release Frame if Acquired ---
-        // ReleaseFrame should be called if AcquireNextFrame succeeded or timed out,
-        // but not if it returned an error like ACCESS_LOST (handled above).
-        // If we reached this point, it means AcquireNextFrame either succeeded
-        // or timed out (ACCESS_LOST and other errors return early).
-        // In both success and timeout cases where we proceed, `acquired_frame`
-        // should be true, indicating ReleaseFrame is required.
-        let should_release = acquired_frame;
-
-        if should_release {
-            trace!("Releasing frame.");
-            duplication.ReleaseFrame()?;
+        // 3. Copy Frame Resource (only if content exists)
+        if frame_has_content {
+            if let Some(ref acquired_resource) = acquired_resource_holder {
+                // Lock context only for the copy operation
+                let mut context_guard = context_mutex.lock().unwrap();
+                match acquired_resource.cast::<ID3D11Texture2D>() {
+                    Ok(source_texture) => {
+                        match texture_pool.acquire_acquisition_texture() {
+                            Ok(pooled_texture) => {
+                                trace!("Copying acquired frame to pooled texture.");
+                                context_guard.CopyResource(&pooled_texture, &source_texture);
+                                final_texture = Some(pooled_texture);
+                                needs_release_to_pool = true;
+                            }
+                            Err(pool_err) => {
+                                error!("Failed to acquire texture from pool: {:?}", pool_err);
+                                drop(context_guard);
+                                drop(acquired_resource_holder);
+                                // Only release if acquire *was* Ok
+                                if frame_acquire_returned_ok {
+                                    if let Err(rel_err) = duplication.ReleaseFrame() {
+                                        warn!("Error releasing frame after texture pool failure: {:?}", rel_err);
+                                        // If release fails here, maybe propagate *that* error instead?
+                                        // return Err(rel_err.into()); // Or just continue and return pool error
+                                    }
+                                }
+                                return Err(FrameError::TexturePoolError);
+                            }
+                        }
+                    }
+                    Err(cast_err) => {
+                        error!(
+                            "Failed to cast acquired resource to ID3D11Texture2D: {:?}",
+                            cast_err
+                        );
+                        drop(context_guard);
+                        drop(acquired_resource_holder);
+                        if frame_acquire_returned_ok {
+                            if let Err(rel_err) = duplication.ReleaseFrame() {
+                                warn!("Error releasing frame after cast failure: {:?}", rel_err);
+                            }
+                        }
+                        return Err(cast_err.into());
+                    }
+                }
+                // Context lock drops here
+            } else {
+                error!("Inconsistent state: frame_has_content is true but acquired_resource_holder is None.");
+                frame_has_content = false; // Correct state
+            }
         }
+
+        // Drop the temporary resource holder reference - content is now in final_texture (if successful)
+        drop(acquired_resource_holder);
+
+        // 4. Release DXGI Frame (*** MODIFIED CONDITION ***)
+        // Only call ReleaseFrame if AcquireNextFrame returned Ok(_)
+        if frame_acquire_returned_ok {
+            trace!("Attempting to release DXGI frame (since AcquireNextFrame returned Ok).");
+            match duplication.ReleaseFrame() {
+                Ok(_) => {
+                    trace!("DXGI frame released successfully.");
+                }
+                Err(e) => {
+                    // This could still happen (e.g., INVALID_CALL even after S_OK acquire)
+                    // Propagate it for recreation.
+                    error!(
+                        "duplication.ReleaseFrame() failed after Ok acquire: {:?}. Code: {:?}",
+                        e,
+                        e.code()
+                    );
+                    // Rely on SendableSample Drop to release texture if it exists
+                    return Err(e.into()); // Propagate the error
+                }
+            }
+        } else {
+            // This now covers the DXGI_ERROR_WAIT_TIMEOUT case and other AcquireNextFrame errors
+            trace!("Skipping ReleaseFrame because AcquireNextFrame returned an error.");
+        }
+
+        // 5. Draw Cursor (AFTER ReleaseFrame attempt, if applicable and content exists)
+        // Keep the context lock attempt around GDI for now, just in case
+        if capture_cursor && frame_has_content {
+            if let Some(ref tex_to_draw_on) = final_texture {
+                trace!("Drawing cursor onto prepared frame.");
+                debug!("Acquiring D3D context lock BEFORE GDI draw...");
+                let _gdi_context_guard = context_mutex.lock().unwrap(); // Lock D3D context
+                debug!(" -> D3D context lock acquired for GDI.");
+                if let Err(e) = draw_cursor_gdi(tex_to_draw_on) {
+                    debug!("Failed to draw cursor using GDI: {:?}", e);
+                }
+                debug!(" -> Releasing D3D context lock AFTER GDI draw.");
+                // D3D context lock released here (_gdi_context_guard goes out of scope)
+            } else {
+                warn!("Capture cursor is true and frame had content, but final_texture is None - skipping cursor draw.");
+            }
+        }
+        // End of focused path logic
     } else {
         // --- Unfocused Path: Use Blank Frame ---
         trace!("Window unfocused, using blank frame.");
-        // No need to call AcquireNextFrame or ReleaseFrame.
-        // No need for context lock just to get the blank texture reference.
-        let blank_texture = texture_pool.get_blank_texture().map_err(|e| {
+        final_texture = Some(texture_pool.get_blank_texture().map_err(|e| {
             error!("Failed to get blank texture from pool: {:?}", e);
             FrameError::TexturePoolError
-        })?;
-        final_texture = Some(blank_texture);
-        needs_release = false; // Blank texture doesn't use the acquisition pool release mechanism
+        })?);
+        needs_release_to_pool = false; // Blank texture isn't released back to acquisition pool
     }
 
-    // --- Frame Sending and Timing Logic (Common to both paths) ---
-
-    // Send the frame if one was prepared (either captured or blank)
+    // 6. Frame Sending and Timing Logic (Common path)
     if let Some(texture_to_send) = final_texture {
         // Handle frame timing duplication BEFORE sending the current frame
         while *accumulated_delay >= frame_duration {
@@ -673,11 +711,8 @@ unsafe fn process_frame(
                 }
                 Err(_) => {
                     warn!("Channel closed during frame duplication, stopping.");
-                    // If the texture was from acquisition, release it before breaking
-                    if needs_release {
-                        texture_pool.release_acquisition_texture(texture_to_send);
-                    }
-                    return Err(FrameError::ChannelClosed);
+                    // Rely on SendableSample's Drop for pool return on error.
+                    return Err(FrameError::ChannelClosed); // Return error, Drop impls will handle cleanup
                 }
             }
         }
@@ -686,35 +721,35 @@ unsafe fn process_frame(
         trace!(
             "Sending frame {} ({}).",
             frame_count,
-            if needs_release { "Captured" } else { "Blank" }
+            if needs_release_to_pool {
+                "Captured"
+            } else {
+                "Blank"
+            } // Log based on pool origin
         );
         match send_frame(&texture_to_send, frame_count, send, sample_pool) {
             Ok(_) => {
-                // If this was an acquisition texture, return it to the pool *after* sending
-                if needs_release {
-                    texture_pool.release_acquisition_texture(texture_to_send);
-                }
+                // Success! Rely on SendableSample Drop to release texture back to pool when done.
+                trace!(
+                    "Frame {} sent, SendableSample will release resources.",
+                    frame_count
+                );
             }
             Err(_) => {
                 warn!("Channel closed during frame sending, stopping.");
-                // If the texture was from acquisition, ensure release before breaking
-                // (Note: send_frame failing likely means the SendableSample dtor already ran,
-                // but explicit release here might be safer if send_frame logic changes)
-                if needs_release {
-                    texture_pool.release_acquisition_texture(texture_to_send);
-                }
+                // Error sending. SendableSample's Drop will handle releasing the texture if needed.
                 return Err(FrameError::ChannelClosed);
             }
         }
     } else {
-        // No frame was prepared (e.g., focused window but AcquireNextFrame timed out)
+        // No frame was prepared (e.g., focused window but AcquireNextFrame timed out or failed early)
         trace!(
             "No final texture prepared for frame {}, skipping send.",
             frame_count
         );
     }
 
-    // --- Advance Frame Timing ---
+    // 7. Advance Frame Timing
     *next_frame_time += frame_duration;
     let current_time = Instant::now();
     handle_frame_timing(current_time, *next_frame_time, accumulated_delay);

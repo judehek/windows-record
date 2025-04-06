@@ -5,7 +5,7 @@ use windows_record::{AudioSource, Recorder, Result};
 fn main() -> Result<()> {
     // Set up logging to see resource tracking in debug builds
     env::set_var("RUST_BACKTRACE", "full");
-    env::set_var("RUST_LOG", "info,windows_record=info");
+    env::set_var("RUST_LOG", "trace,windows_record=trace");
     env_logger::init();
 
     // Create recorder
@@ -19,7 +19,7 @@ fn main() -> Result<()> {
         .microphone_volume(1.0)
         .system_volume(1.0)
         .debug_mode(true)
-        .capture_cursor(true)
+        .capture_cursor(false)
         .output_path("output.mp4")
         .build();
 
