@@ -803,7 +803,43 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
         info!("D3D11 creation flags with debug: {:?}", flags);
     }
 
-    // Try to create device with debug layer first
+    // Create DXGI Factory to enumerate adapters
+    let dxgi_factory: windows::Win32::Graphics::Dxgi::IDXGIFactory1 = 
+        windows::Win32::Graphics::Dxgi::CreateDXGIFactory1()?;
+    info!("DXGI Factory created for adapter enumeration");
+
+    // Enumerate all graphics adapters
+    let mut adapter_index = 0;
+    let mut adapters = Vec::new();
+    
+    loop {
+        match dxgi_factory.EnumAdapters(adapter_index) {
+            Ok(adapter) => {
+                // Get adapter description for logging
+                let mut desc = windows::Win32::Graphics::Dxgi::DXGI_ADAPTER_DESC::default();
+                let _ = adapter.GetDesc(&mut desc);
+                
+                let adapter_name = String::from_utf16_lossy(
+                    &desc.Description[..desc.Description.iter().position(|&c| c == 0).unwrap_or(desc.Description.len())]
+                );
+                
+                info!("Found adapter {}: {} (VRAM: {} MB, System Memory: {} MB)", 
+                    adapter_index, 
+                    adapter_name,
+                    desc.DedicatedVideoMemory / (1024 * 1024),
+                    desc.DedicatedSystemMemory / (1024 * 1024)
+                );
+                
+                adapters.push(adapter);
+                adapter_index += 1;
+            },
+            Err(_) => break, // No more adapters
+        }
+    }
+    
+    info!("Found {} graphics adapters", adapters.len());
+    
+    // Try to create device with debug layer first using the default adapter
     info!("Attempting to create D3D11 device with current flags");
     let result = D3D11CreateDevice(
         None,

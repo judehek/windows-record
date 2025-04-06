@@ -271,8 +271,8 @@ pub unsafe fn get_frames(
     // Signal that we're ready
     started.wait();
 
-    // Initialize duplication
-    let mut duplication_result = setup_dxgi_duplication(&device);
+    // Initialize duplication using the adapter for the window
+    let mut duplication_result = unsafe { super::dxgi::setup_dxgi_duplication_for_window(&device, hwnd) };
 
     // Main recording loop
     while recording.load(Ordering::Relaxed) {
@@ -294,6 +294,10 @@ pub unsafe fn get_frames(
                 );
                 window_tracker =
                     WindowTracker::new_with_exact_match(new_hwnd, process_name, use_exact_match);
+                
+                // Recreate the duplication for the new window
+                info!("Recreating DXGI duplication for new window");
+                duplication_result = unsafe { super::dxgi::setup_dxgi_duplication_for_window(&device, new_hwnd) };
             } else {
                 // Can't find window, wait and retry
                 warn!("Window '{}' not found, will retry", process_name);
