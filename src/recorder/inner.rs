@@ -6,6 +6,7 @@ use std::sync::Barrier;
 use std::sync::RwLock;
 use std::thread::JoinHandle;
 use windows::core::{ComInterface, Result};
+use windows::Win32::Foundation::{HWND, RECT, POINT};
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::System::Performance::QueryPerformanceCounter;
@@ -15,7 +16,7 @@ use crate::capture::window::get_window_rect;
 use crate::capture::{
     collect_audio, collect_microphone, get_frames, get_window_by_exact_string, get_window_by_string,
 };
-use crate::device::{get_audio_input_device_by_name, get_video_encoder_by_type};
+use crate::device::get_audio_input_device_by_name;
 use crate::error::RecorderError;
 use crate::processing::{media, process_samples};
 use crate::types::{ReplayBuffer, SendableSample, SendableWriter};
@@ -281,10 +282,10 @@ impl RecorderInner {
                 initial_window_position, initial_window_size
             );
 
-            // Create D3D11 device and context
-            info!("Creating D3D11 device and context");
-            let (device, context) = create_d3d11_device()?;
-            info!("D3D11 device and context created");
+            // Create D3D11 device and context specifically for the window's adapter
+            info!("Creating D3D11 device and context for the window's adapter");
+            let (device, context) = create_d3d11_device_for_window(hwnd)?;
+            info!("D3D11 device and context created for window's adapter");
             let device = Arc::new(device);
             info!("D3D11 device wrapped in Arc");
             let context_mutex = Arc::new(std::sync::Mutex::new(context));
@@ -775,8 +776,9 @@ impl Drop for RecorderInner {
     }
 }
 
-unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
-    info!("Creating D3D11 device");
+/// Creates a D3D11 device for a specific window
+/// This ensures the device is created on the correct adapter for the window
+unsafe fn create_d3d11_device_for_window(hwnd: HWND) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     let feature_levels = [
         D3D_FEATURE_LEVEL_11_1,
         D3D_FEATURE_LEVEL_11_0,
@@ -786,126 +788,145 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
         D3D_FEATURE_LEVEL_9_2,
         D3D_FEATURE_LEVEL_9_1,
     ];
-    info!("Feature levels defined");
 
-    let mut device = None;
-    let mut context = None;
-
-    // Base flags
+    // Base flags - just BGRA support by default
     let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-    info!("Base D3D11 creation flags: {:?}", flags);
-
-    // In debug builds, try to use debug layer
-    #[cfg(debug_assertions)]
-    {
-        info!("Adding debug layer flag in debug build");
-        flags |= D3D11_CREATE_DEVICE_DEBUG;
-        info!("D3D11 creation flags with debug: {:?}", flags);
-    }
 
     // Create DXGI Factory to enumerate adapters
     let dxgi_factory: windows::Win32::Graphics::Dxgi::IDXGIFactory1 = 
         windows::Win32::Graphics::Dxgi::CreateDXGIFactory1()?;
-    info!("DXGI Factory created for adapter enumeration");
-
-    // Enumerate all graphics adapters
-    let mut adapter_index = 0;
-    let mut adapters = Vec::new();
     
+    // Get the window's monitor
+    let window_monitor = windows::Win32::Graphics::Gdi::MonitorFromWindow(
+        hwnd, 
+        windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTOPRIMARY
+    );
+    
+    // Get window position for adapter matching
+    let mut window_rect = RECT::default();
+    let window_center = if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut window_rect).as_bool() {
+        POINT {
+            x: (window_rect.left + window_rect.right) / 2,
+            y: (window_rect.top + window_rect.bottom) / 2,
+        }
+    } else {
+        POINT { x: 0, y: 0 }
+    };
+
+    // Enumerate all graphics adapters and find the best match for this window
+    let mut adapter_index: u32 = 0;
+    let mut adapters = Vec::new();
+    let mut target_adapter_idx: usize = 0;
+    let mut found_matching_adapter = false;
+    
+    // Find the adapter that matches the window's monitor
     loop {
         match dxgi_factory.EnumAdapters(adapter_index) {
             Ok(adapter) => {
-                // Get adapter description for logging
-                let mut desc = windows::Win32::Graphics::Dxgi::DXGI_ADAPTER_DESC::default();
-                let _ = adapter.GetDesc(&mut desc);
-                
-                let adapter_name = String::from_utf16_lossy(
-                    &desc.Description[..desc.Description.iter().position(|&c| c == 0).unwrap_or(desc.Description.len())]
-                );
-                
-                info!("Found adapter {}: {} (VRAM: {} MB, System Memory: {} MB)", 
-                    adapter_index, 
-                    adapter_name,
-                    desc.DedicatedVideoMemory / (1024 * 1024),
-                    desc.DedicatedSystemMemory / (1024 * 1024)
-                );
+                // Try to find if this adapter has the output for our window
+                let mut output_index: u32 = 0;
+                loop {
+                    match adapter.EnumOutputs(output_index) {
+                        Ok(output) => {
+                            // Get the monitor handle for this output
+                            let mut output_desc = windows::Win32::Graphics::Dxgi::DXGI_OUTPUT_DESC::default();
+                            if output.GetDesc(&mut output_desc).is_ok() {
+                                // Check if this is the same monitor as our window
+                                if output_desc.Monitor == window_monitor {
+                                    target_adapter_idx = adapter_index as usize;
+                                    found_matching_adapter = true;
+                                    break;
+                                }
+                                
+                                // Alternative check using window center point
+                                let monitor_rect = output_desc.DesktopCoordinates;
+                                if window_center.x >= monitor_rect.left
+                                    && window_center.x < monitor_rect.right
+                                    && window_center.y >= monitor_rect.top
+                                    && window_center.y < monitor_rect.bottom
+                                {
+                                    target_adapter_idx = adapter_index as usize;
+                                    found_matching_adapter = true;
+                                    break;
+                                }
+                            }
+                            output_index += 1;
+                        },
+                        Err(_) => break, // No more outputs on this adapter
+                    }
+                }
                 
                 adapters.push(adapter);
                 adapter_index += 1;
+                
+                // If we found the matching adapter, we can stop enumerating
+                if found_matching_adapter {
+                    break;
+                }
             },
             Err(_) => break, // No more adapters
         }
     }
     
-    info!("Found {} graphics adapters", adapters.len());
+    // Select default adapter if none matched
+    if !found_matching_adapter && !adapters.is_empty() {
+        target_adapter_idx = 0;
+    }
     
-    // We'll use the first adapter by default if available
-    // Later when capturing we'll select the specific adapter for the window
+    // Create device using the target adapter
+    let mut device = None;
+    let mut context = None;
     let mut created_successfully = false;
     
     if !adapters.is_empty() {
-        info!("Attempting to create D3D11 device with adapter-specific creation");
+        let adapter = &adapters[target_adapter_idx];
         
-        // Start with first adapter (usually the primary GPU)
-        for (idx, adapter) in adapters.iter().enumerate() {
-            info!("Trying to create device with adapter {}", idx);
-            
-            // When using explicit adapter, driver type must be UNKNOWN
-            let result = D3D11CreateDevice(
-                Some(adapter),
-                D3D_DRIVER_TYPE_UNKNOWN, // Must be UNKNOWN when adapter is specified
-                None,
-                flags,
-                Some(&feature_levels),
-                D3D11_SDK_VERSION,
-                Some(&mut device),
-                None,
-                Some(&mut context),
-            );
-            
-            if let Err(e) = result {
-                info!("Failed to create device with adapter {}: {:?}", idx, e);
-                
-                // If it's just the debug layer missing, try without it
-                if e.code() == windows::Win32::Graphics::Dxgi::DXGI_ERROR_SDK_COMPONENT_MISSING && flags.0 & D3D11_CREATE_DEVICE_DEBUG.0 != 0 {
-                    info!("Debug layer not available, trying without debug flag");
-                    let debug_free_flags = D3D11_CREATE_DEVICE_FLAG(flags.0 & !D3D11_CREATE_DEVICE_DEBUG.0);
-                    
-                    let retry_result = D3D11CreateDevice(
-                        Some(adapter),
-                        D3D_DRIVER_TYPE_UNKNOWN,
-                        None,
-                        debug_free_flags,
-                        Some(&feature_levels),
-                        D3D11_SDK_VERSION,
-                        Some(&mut device),
-                        None,
-                        Some(&mut context),
-                    );
-                    
-                    if retry_result.is_ok() {
-                        info!("Successfully created device on adapter {} without debug layer", idx);
-                        created_successfully = true;
-                        break;
-                    } else {
-                        info!("Failed to create device on adapter {} even without debug layer", idx);
-                    }
+        // When using explicit adapter, driver type must be UNKNOWN
+        let result = D3D11CreateDevice(
+            Some(adapter),
+            D3D_DRIVER_TYPE_UNKNOWN, // Must be UNKNOWN when adapter is specified
+            None,
+            flags,
+            Some(&feature_levels),
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            Some(&mut context),
+        );
+        
+        if let Err(e) = result {
+            // Try other adapters as fallback
+            for (idx, adapter) in adapters.iter().enumerate() {
+                if idx == target_adapter_idx {
+                    continue; // Already tried this one
                 }
-                // Continue to the next adapter
-            } else {
-                info!("Successfully created device on adapter {}", idx);
-                created_successfully = true;
-                break;
+                
+                let fallback_result = D3D11CreateDevice(
+                    Some(adapter),
+                    D3D_DRIVER_TYPE_UNKNOWN,
+                    None,
+                    flags,
+                    Some(&feature_levels),
+                    D3D11_SDK_VERSION,
+                    Some(&mut device),
+                    None,
+                    Some(&mut context),
+                );
+                
+                if fallback_result.is_ok() {
+                    created_successfully = true;
+                    break;
+                }
             }
+        } else {
+            created_successfully = true;
         }
     }
     
-    // Fallback to default adapter creation if adapter-specific approach failed
+    // Fallback to default adapter creation if all else fails
     if !created_successfully {
-        info!("Adapter-specific creation failed or no adapters found, falling back to default creation");
-        
-        // Try to create device with debug layer first using the default adapter
-        let result = D3D11CreateDevice(
+        // Create device using the default adapter
+        D3D11CreateDevice(
             None,
             D3D_DRIVER_TYPE_HARDWARE,
             None,
@@ -915,73 +936,15 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
             Some(&mut device),
             None,
             Some(&mut context),
-        );
-
-        // If debug layer is not available, retry without it
-        if let Err(e) = result {
-            info!("D3D11 device creation failed with error: {:?}", e);
-            if e.code() == windows::Win32::Graphics::Dxgi::DXGI_ERROR_SDK_COMPONENT_MISSING {
-                info!("Debug layer not available, falling back to non-debug creation");
-                flags = D3D11_CREATE_DEVICE_FLAG(flags.0 & !D3D11_CREATE_DEVICE_DEBUG.0);
-                info!("New flags without debug: {:?}", flags);
-                info!("Retrying D3D11 device creation without debug flag");
-                D3D11CreateDevice(
-                    None,
-                    D3D_DRIVER_TYPE_HARDWARE,
-                    None,
-                    flags,
-                    Some(&feature_levels),
-                    D3D11_SDK_VERSION,
-                    Some(&mut device),
-                    None,
-                    Some(&mut context),
-                )?;
-                info!("D3D11 device created successfully without debug flag");
-            } else {
-                error!("Failed to create D3D11 device: {:?}", e);
-                return Err(e);
-            }
-        } else {
-            info!("D3D11 device created successfully on first attempt");
-        }
+        )?;
     }
 
     let device = device.unwrap();
-    info!("D3D11 device unwrapped");
     let context = context.unwrap();
-    info!("D3D11 context unwrapped");
 
     // Enable multi-threading
-    info!("Enabling multi-threading on D3D11 device");
     let multithread: ID3D11Multithread = device.cast()?;
     multithread.SetMultithreadProtected(true);
-    info!("Multi-threading enabled on D3D11 device");
 
-    #[cfg(debug_assertions)]
-    {
-        info!("Checking for debug interfaces in debug build");
-        // Try to enable resource tracking via debug interface
-        if let Ok(_debug) = device.cast::<ID3D11Debug>() {
-            info!("D3D11 Debug interface available - resource tracking enabled");
-
-            // Enable debug info tracking
-            info!("Attempting to get info queue interface");
-            if let Ok(info_queue) = device.cast::<ID3D11InfoQueue>() {
-                info!("Info queue interface acquired, configuring error tracking");
-                // Configure info queue to break on D3D11 errors
-                info_queue.SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, true)?;
-                info!("Break on error severity enabled");
-                info_queue.SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, true)?;
-                info!("Break on corruption severity enabled");
-                info!("D3D11 Info Queue configured for error tracking");
-            } else {
-                info!("Info queue interface not available");
-            }
-        } else {
-            info!("D3D11 Debug interface not available");
-        }
-    }
-
-    info!("D3D11 device creation completed successfully");
     Ok((device, context))
 }

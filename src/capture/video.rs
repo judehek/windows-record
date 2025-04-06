@@ -271,7 +271,7 @@ pub unsafe fn get_frames(
     // Signal that we're ready
     started.wait();
 
-    // Initialize duplication using the adapter for the window
+    // Directly use duplication for the window using our device (which was created for this window's adapter)
     let mut duplication_result = unsafe { super::dxgi::setup_dxgi_duplication_for_window(&device, hwnd) };
 
     // Main recording loop
