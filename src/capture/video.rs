@@ -271,8 +271,9 @@ pub unsafe fn get_frames(
     // Signal that we're ready
     started.wait();
 
-    // Directly use duplication for the window using our device (which was created for this window's adapter)
-    let mut duplication_result = unsafe { super::dxgi::setup_dxgi_duplication_for_window(&device, hwnd) };
+    // The device was already created for the correct adapter in inner.rs, so just set up duplication
+    // We can use the simpler setup since the device already knows which adapter to use
+    let mut duplication_result = unsafe { super::dxgi::setup_dxgi_duplication(&device) };
 
     // Main recording loop
     while recording.load(Ordering::Relaxed) {
@@ -296,8 +297,10 @@ pub unsafe fn get_frames(
                     WindowTracker::new_with_exact_match(new_hwnd, process_name, use_exact_match);
                 
                 // Recreate the duplication for the new window
-                info!("Recreating DXGI duplication for new window");
-                duplication_result = unsafe { super::dxgi::setup_dxgi_duplication_for_window(&device, new_hwnd) };
+                // Since we're using the same device (which was created for the correct adapter),
+                // we can use the simpler duplication setup
+                info!("Recreating DXGI duplication");
+                duplication_result = unsafe { super::dxgi::setup_dxgi_duplication(&device) };
             } else {
                 // Can't find window, wait and retry
                 warn!("Window '{}' not found, will retry", process_name);

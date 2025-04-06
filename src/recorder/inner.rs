@@ -789,9 +789,13 @@ unsafe fn create_d3d11_device_for_window(hwnd: HWND) -> Result<(ID3D11Device, ID
         D3D_FEATURE_LEVEL_9_1,
     ];
 
-    // Base flags - just BGRA support by default
-    let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+    // Base flags
+    let flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 
+    // Find the adapter associated with the window's monitor
+    let mut device = None;
+    let mut context = None;
+    
     // Create DXGI Factory to enumerate adapters
     let dxgi_factory: windows::Win32::Graphics::Dxgi::IDXGIFactory1 = 
         windows::Win32::Graphics::Dxgi::CreateDXGIFactory1()?;
@@ -813,78 +817,57 @@ unsafe fn create_d3d11_device_for_window(hwnd: HWND) -> Result<(ID3D11Device, ID
         POINT { x: 0, y: 0 }
     };
 
-    // Enumerate all graphics adapters and find the best match for this window
-    let mut adapter_index: u32 = 0;
-    let mut adapters = Vec::new();
-    let mut target_adapter_idx: usize = 0;
-    let mut found_matching_adapter = false;
+    // Try to find the matching adapter for the window
+    let mut adapter_index = 0;
+    let mut target_adapter = None;
     
     // Find the adapter that matches the window's monitor
     loop {
         match dxgi_factory.EnumAdapters(adapter_index) {
             Ok(adapter) => {
-                // Try to find if this adapter has the output for our window
-                let mut output_index: u32 = 0;
+                let mut output_index = 0;
                 loop {
                     match adapter.EnumOutputs(output_index) {
                         Ok(output) => {
-                            // Get the monitor handle for this output
                             let mut output_desc = windows::Win32::Graphics::Dxgi::DXGI_OUTPUT_DESC::default();
                             if output.GetDesc(&mut output_desc).is_ok() {
-                                // Check if this is the same monitor as our window
+                                // Check if this output matches our window's monitor
                                 if output_desc.Monitor == window_monitor {
-                                    target_adapter_idx = adapter_index as usize;
-                                    found_matching_adapter = true;
+                                    target_adapter = Some(adapter);
                                     break;
                                 }
                                 
                                 // Alternative check using window center point
-                                let monitor_rect = output_desc.DesktopCoordinates;
-                                if window_center.x >= monitor_rect.left
-                                    && window_center.x < monitor_rect.right
-                                    && window_center.y >= monitor_rect.top
-                                    && window_center.y < monitor_rect.bottom
+                                let rect = output_desc.DesktopCoordinates;
+                                if window_center.x >= rect.left && window_center.x < rect.right
+                                    && window_center.y >= rect.top && window_center.y < rect.bottom
                                 {
-                                    target_adapter_idx = adapter_index as usize;
-                                    found_matching_adapter = true;
+                                    target_adapter = Some(adapter);
                                     break;
                                 }
                             }
                             output_index += 1;
                         },
-                        Err(_) => break, // No more outputs on this adapter
+                        Err(_) => break, // No more outputs
                     }
                 }
                 
-                adapters.push(adapter);
-                adapter_index += 1;
-                
-                // If we found the matching adapter, we can stop enumerating
-                if found_matching_adapter {
+                // If we found a matching adapter, break the loop
+                if target_adapter.is_some() {
                     break;
                 }
+                
+                adapter_index += 1;
             },
             Err(_) => break, // No more adapters
         }
     }
     
-    // Select default adapter if none matched
-    if !found_matching_adapter && !adapters.is_empty() {
-        target_adapter_idx = 0;
-    }
-    
-    // Create device using the target adapter
-    let mut device = None;
-    let mut context = None;
-    let mut created_successfully = false;
-    
-    if !adapters.is_empty() {
-        let adapter = &adapters[target_adapter_idx];
-        
-        // When using explicit adapter, driver type must be UNKNOWN
+    // Try to create device on the target adapter first
+    if let Some(adapter) = target_adapter {
         let result = D3D11CreateDevice(
-            Some(adapter),
-            D3D_DRIVER_TYPE_UNKNOWN, // Must be UNKNOWN when adapter is specified
+            Some(&adapter),
+            D3D_DRIVER_TYPE_UNKNOWN,
             None,
             flags,
             Some(&feature_levels),
@@ -894,38 +877,15 @@ unsafe fn create_d3d11_device_for_window(hwnd: HWND) -> Result<(ID3D11Device, ID
             Some(&mut context),
         );
         
-        if let Err(e) = result {
-            // Try other adapters as fallback
-            for (idx, adapter) in adapters.iter().enumerate() {
-                if idx == target_adapter_idx {
-                    continue; // Already tried this one
-                }
-                
-                let fallback_result = D3D11CreateDevice(
-                    Some(adapter),
-                    D3D_DRIVER_TYPE_UNKNOWN,
-                    None,
-                    flags,
-                    Some(&feature_levels),
-                    D3D11_SDK_VERSION,
-                    Some(&mut device),
-                    None,
-                    Some(&mut context),
-                );
-                
-                if fallback_result.is_ok() {
-                    created_successfully = true;
-                    break;
-                }
-            }
-        } else {
-            created_successfully = true;
+        // If creation on target adapter failed, fallback to default
+        if result.is_err() {
+            device = None;
+            context = None;
         }
     }
     
-    // Fallback to default adapter creation if all else fails
-    if !created_successfully {
-        // Create device using the default adapter
+    // If we still don't have a device, create with default adapter
+    if device.is_none() {
         D3D11CreateDevice(
             None,
             D3D_DRIVER_TYPE_HARDWARE,
