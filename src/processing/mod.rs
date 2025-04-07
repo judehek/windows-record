@@ -1,20 +1,29 @@
 pub mod audio;
+pub mod encoder;
 pub mod media;
 pub mod video;
 
 use audio::AudioMixer;
+use encoder::{VideoEncoder, VideoEncoderInputSample}; // Import new encoder types
 use log::{debug, error, info, trace, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
-use windows::core::Result;
-use windows::Win32::Graphics::Direct3D11::ID3D11Device;
-use windows::Win32::Media::MediaFoundation::IMFDXGIDeviceManager;
+use std::time::Duration;
+use video::VideoProcessor; // Import VideoProcessor
+use windows::core::{ComInterface, Interface, Result}; // Added ComInterface, Interface
+use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D}; // Added ID3D11Texture2D
+use windows::Win32::Media::MediaFoundation::{
+    IMFGetService,
+    MR_BUFFER_SERVICE, // Added MR_BUFFER_SERVICE
+};
 
+use crate::device; // Import device module for VideoEncoder type
 use crate::types::{
     ReplayBuffer, SendableDxgiDeviceManager, SendableSample, SendableWriter, TexturePool,
 };
 
+// Add selected_encoder, bit_rate, frame_rate parameters
 pub fn process_samples(
     writer: SendableWriter,
     rec_video: Receiver<SendableSample>,
@@ -28,6 +37,9 @@ pub fn process_samples(
     output_height: u32,
     device: Arc<ID3D11Device>,
     dxgi_device_manager: Arc<SendableDxgiDeviceManager>,
+    selected_encoder: device::video::VideoEncoder, // Added
+    bit_rate: u32,                                 // Added
+    frame_rate: u32,                               // Added
     capture_audio: bool,
     capture_microphone: bool,
     system_volume: Option<f32>,
@@ -156,21 +168,28 @@ pub fn process_samples(
         info!("Window info monitoring thread finished");
     });
 
-    let converter = unsafe {
-        video::setup_video_converter(
-            input_width,
-            input_height,
-            output_width,
-            output_height,
-            &dxgi_device_manager,
-            window_position.clone(),
-            window_size.clone(),
-        )
-    }?;
-    info!("Video processor transform created and configured");
+    // Create VideoProcessor
+    let mut video_processor = VideoProcessor::new(
+        device.clone(), // Pass the Arc<ID3D11Device>
+        (input_width, input_height),
+        (output_width, output_height),
+        (frame_rate, 1), // Assuming frame_rate is numerator, denominator is 1
+                         // TODO: Confirm frame_rate parameter represents (num, den) or just num.
+                         // If just num, might need to adjust recorder/config.
+    )?;
+    info!("VideoProcessor created");
 
-    let mut frame_count = 0;
-    let start_time = std::time::Instant::now();
+    // Create VideoEncoder
+    let mut video_encoder = VideoEncoder::new(
+        &selected_encoder,
+        device.clone(),                // Pass Arc<ID3D11Device>
+        dxgi_device_manager.clone(),   // Pass Arc<SendableDxgiDeviceManager>
+        (input_width, input_height),   // Pass tuple
+        (output_width, output_height), // Pass tuple
+        bit_rate,
+        (frame_rate, 1), // Pass tuple, assuming denominator 1
+    )?;
+    info!("VideoEncoder created");
 
     let mut microphone_disconnected = false;
     let mut audio_disconnected = false;
@@ -179,72 +198,108 @@ pub fn process_samples(
     let mut last_window_check = std::time::Instant::now();
     let window_check_interval = std::time::Duration::from_millis(500); // Check every 500ms
 
-    while recording.load(Ordering::Relaxed) {
-        let mut had_work = false;
+    // --- Video Processing Setup ---
+    let video_processor = Arc::new(Mutex::new(video_processor));
+    let texture_pool_clone = texture_pool.clone(); // Clone for the callback
 
-        // Check if window has changed and update converter if needed
-        let now = std::time::Instant::now();
-        if now.duration_since(last_window_check) >= window_check_interval {
-            last_window_check = now;
+    // Define sample_requested_callback
+    let window_position_encoder = window_position.clone();
+    let window_size_encoder = window_size.clone();
+    video_encoder.set_sample_requested_callback(move || {
+        match rec_video.recv() {
+            // Use blocking recv as encoder drives the pace
+            Ok(sendable_sample) => {
+                let sample = &*sendable_sample.sample; // Deref Arc<IMFSample>
+                                                       // Get timestamp as i64 (100ns units)
+                let timestamp_raw: i64 = unsafe { sample.GetSampleTime()? };
+                // Convert to TimeSpan
+                let timestamp = windows::Foundation::TimeSpan {
+                    Duration: timestamp_raw,
+                };
 
-            if window_changed.swap(false, Ordering::SeqCst) {
-                info!("Main thread: Detected window change, updating video converter");
-                let current_pos = *window_position.lock().unwrap();
-                let current_size = *window_size.lock().unwrap();
+                // Get the underlying texture from the sample buffer
+                let buffer = unsafe { sample.GetBufferByIndex(0)? };
+                let texture: ID3D11Texture2D = unsafe {
+                    // Use IMFGetService to get the texture interface from the buffer
+                    let service: IMFGetService = buffer.cast()?;
 
-                unsafe {
-                    if let Err(e) = video::update_video_converter(
-                        &converter,
-                        input_width,
-                        input_height,
-                        current_pos,
-                        current_size,
-                    ) {
-                        warn!("Failed to update video converter: {:?}", e);
-                    }
-                }
+                    // Call GetService with proper type parameter and single GUID argument
+                    service.GetService::<ID3D11Texture2D>(&MR_BUFFER_SERVICE)?
+                };
+
+                // Lock the processor to process the texture
+                let mut processor_lock = video_processor.lock().unwrap();
+
+                // Calculate source rect based on current window info
+                let current_pos = *window_position_encoder.lock().unwrap();
+                let current_size = *window_size_encoder.lock().unwrap();
+
+                // Use the helper function from the video module
+                let source_rect = video::calculate_source_rect(
+                    input_width,
+                    input_height,
+                    current_pos,
+                    current_size,
+                );
+
+                // Process the texture using the extracted texture and calculated rect
+                processor_lock.process_texture(&texture, source_rect)?; // Pass correct args
+                                                                        // Get the resulting texture (NV12) from the processor
+                let processed_texture = processor_lock.output_texture().clone(); // Clone the output texture Arc
+
+                // Create the input sample for the encoder with TimeSpan
+                // Create the input sample for the encoder with TimeSpan
+                let input_sample = VideoEncoderInputSample::new(timestamp, processed_texture);
+                Ok(Some(input_sample))
+            }
+            Err(_) => {
+                info!("Video receive channel disconnected or error.");
+                Ok(None) // Signal encoder to stop
             }
         }
+    });
 
-        // Process video samples - video is required
-        match rec_video.try_recv() {
-            Ok(samp) => {
-                had_work = true;
-                // Extract timestamp for the replay buffer
-                let timestamp: i64 = unsafe { samp.sample.GetSampleTime() }?;
+    // Define sample_rendered_callback
+    let writer_clone = writer.clone(); // Clone SendableWriter for the callback
+    let replay_buffer_clone = replay_buffer.clone(); // Clone Option<Arc<ReplayBuffer>>
+    video_encoder.set_sample_rendered_callback(move |output_sample| {
+        let sample = output_sample.sample();
+        let timestamp = unsafe { sample.GetSampleTime()? };
 
-                // Convert and write to file as usual
-                let converted = unsafe {
-                    video::convert_bgra_to_nv12(
-                        &device,
-                        &converter,
-                        &*samp.sample,
-                        output_width,
-                        output_height,
-                        &texture_pool,
-                    )?
-                };
-                // Add to replay buffer if enabled
-                if let Some(buffer) = &replay_buffer {
-                    // Clone the IMFSample directly
-                    buffer.add_video_sample(SendableSample::new(converted.clone()), timestamp)?;
-                }
-                unsafe { writer.0.WriteSample(video_stream_index, &converted)? };
+        // Add to replay buffer if enabled
+        if let Some(buffer) = &replay_buffer_clone {
+            // Clone the IMFSample for the buffer
+            buffer.add_video_sample(SendableSample::new(sample.clone()), timestamp)?;
+        }
 
-                frame_count += 1;
-                if frame_count % 100 == 0 {
-                    info!(
-                        "Processed {} frames in {:?}",
-                        frame_count,
-                        start_time.elapsed()
-                    );
-                }
-            }
-            Err(TryRecvError::Empty) => {}
-            Err(e) => {
-                error!("Error receiving video sample: {:?}", e);
-                break;
-            }
+        // Write to the main sink writer
+        unsafe { writer_clone.0.WriteSample(video_stream_index, sample)? };
+        Ok(())
+    });
+
+    // Start the encoder thread
+    if !video_encoder.try_start()? {
+        error!("Failed to start video encoder thread!");
+        // Handle error appropriately, maybe stop recording
+        recording.store(false, Ordering::SeqCst);
+    } else {
+        info!("Video encoder started successfully.");
+    }
+
+    // --- Main Processing Loop (Now mostly for audio) ---
+    let start_time = std::time::Instant::now(); // Keep track of time for logging
+    let mut last_log_time = start_time;
+
+    while recording.load(Ordering::Relaxed) {
+        let mut had_work = false; // Track if any audio processing happened
+
+        // Check if encoder thread has finished (panicked or completed)
+        if video_encoder.is_finished() {
+            error!("Video encoder thread finished unexpectedly. Stopping recording.");
+            // We don't call stop() here, just break the loop.
+            // The final stop() call after the loop will handle joining and error reporting.
+            recording.store(false, Ordering::SeqCst);
+            break;
         }
 
         // Process audio samples from system audio
@@ -378,15 +433,26 @@ pub fn process_samples(
         }
 
         if !had_work {
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            // Only sleep if no audio work was done, video is handled by encoder thread
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        // Log progress periodically
+        let now = std::time::Instant::now();
+        if now.duration_since(last_log_time) >= Duration::from_secs(10) {
+            info!("Recording active for {:?}", now.duration_since(start_time));
+            last_log_time = now;
         }
     }
 
     info!(
         "Sample processing finished. Processed {} frames in {:?}",
-        frame_count,
+        video_encoder.frame_count(), // Get frame count from encoder
         start_time.elapsed()
     );
+    // Stop the encoder thread gracefully
+    video_encoder.stop()?;
+    info!("Video encoder stopped.");
     unsafe { writer.0.Finalize()? };
     Ok(())
 }

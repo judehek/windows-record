@@ -202,18 +202,20 @@ impl RecorderInner {
                     Some(encoder) => {
                         info!(
                             "Found encoder by name: '{}' ({:?})",
-                            encoder_name, encoder.encoder_type
+                            encoder_name, encoder.encoder_type // Use 'encoder' variable from match scope
                         );
                         encoder
                     }
                     None => {
                         info!("Encoder '{}' not found, falling back to type", encoder_name);
-                        crate::device::get_video_encoder_by_type(*config.video_encoder())?
+                        crate::device::get_preferred_video_encoder_by_type(*config.video_encoder()) // Use renamed function
+                            .ok_or_else(|| RecorderError::Generic(format!("No preferred video encoder found for type: {:?}", config.video_encoder())))?
                     }
                 }
             } else {
                 info!("Looking for encoder by type: {:?}", config.video_encoder());
-                crate::device::get_video_encoder_by_type(*config.video_encoder())?
+                crate::device::get_preferred_video_encoder_by_type(*config.video_encoder()) // Use renamed function
+                    .ok_or_else(|| RecorderError::Generic(format!("No preferred video encoder found for type: {:?}", config.video_encoder())))?
             };
             info!(
                 "Video encoder obtained: {} ({:?})",
@@ -231,7 +233,7 @@ impl RecorderInner {
                 capture_audio,
                 capture_microphone,
                 video_bitrate,
-                &video_encoder.output_format_guid, // Use output_format_guid instead of id
+                &video_encoder.encoder_type.get_guid(), // Use 'video_encoder' which holds the final result
             )?;
             info!("Media sink writer created successfully");
 
@@ -464,9 +466,10 @@ impl RecorderInner {
             let processing_texture_pool = Arc::new(processing_texture_pool);
             info!("Created NV12 processing texture pool successfully.");
             let processing_texture_pool_clone = processing_texture_pool.clone();
+            let video_encoder_clone = video_encoder.clone(); // Clone the selected encoder
             
             process_handle = Some(std::thread::spawn(move || {
-                info!("Processing thread started");
+                info!("Processing thread started"); // No-op change
                 let result = process_samples(
                     sendable_sink,
                     receiver_video,
@@ -480,6 +483,9 @@ impl RecorderInner {
                     output_height, // Target dimensions
                     device_clone_for_processing,
                     dxgi_manager_clone,
+                    video_encoder_clone, // Pass selected encoder
+                    video_bitrate,       // Pass bit_rate
+                    fps_num,             // Pass frame_rate (numerator)
                     capture_audio,
                     capture_microphone,
                     system_volume,
@@ -658,13 +664,14 @@ impl RecorderInner {
                     Some(encoder) => {
                         info!(
                             "Found encoder by name: '{}' ({:?})",
-                            encoder_name, encoder.encoder_type
+                            encoder_name, encoder.encoder_type // Use 'encoder' variable from match scope
                         );
                         encoder
                     }
                     None => {
                         info!("Encoder '{}' not found, falling back to type", encoder_name);
-                        crate::device::get_video_encoder_by_type(*self.config.video_encoder())?
+                        crate::device::get_preferred_video_encoder_by_type(*self.config.video_encoder()) // Use renamed function
+                            .ok_or_else(|| RecorderError::Generic(format!("No preferred video encoder found for type: {:?}", self.config.video_encoder())))?
                     }
                 }
             } else {
@@ -672,7 +679,8 @@ impl RecorderInner {
                     "Looking for encoder by type: {:?}",
                     self.config.video_encoder()
                 );
-                crate::device::get_video_encoder_by_type(*self.config.video_encoder())?
+                crate::device::get_preferred_video_encoder_by_type(*self.config.video_encoder()) // Use renamed function
+                    .ok_or_else(|| RecorderError::Generic(format!("No preferred video encoder found for type: {:?}", self.config.video_encoder())))?
             };
             info!(
                 "Video encoder obtained: {} ({:?})",
@@ -689,7 +697,7 @@ impl RecorderInner {
                 self.config.capture_audio(),
                 self.config.capture_microphone(),
                 self.config.video_bitrate(),
-                &video_encoder.output_format_guid, // Use output_format_guid instead of id
+                &video_encoder.encoder_type.get_guid(), // Use 'video_encoder' which holds the final result
             )?;
             info!("Created sink writer for replay file");
 
