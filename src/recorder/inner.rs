@@ -1,6 +1,8 @@
 use log::{debug, error, info, warn};
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12;
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory1, DXGI_OUTPUT_DESC};
 use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
+use windows::Win32::Media::MediaFoundation::{IMFDXGIDeviceManager, MFCreateDXGIDeviceManager};
 use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
@@ -22,7 +24,7 @@ use crate::capture::{
 use crate::device::get_audio_input_device_by_name;
 use crate::error::RecorderError;
 use crate::processing::{media, process_samples};
-use crate::types::{ReplayBuffer, SendableSample, SendableWriter};
+use crate::types::{ReplayBuffer, SendableDxgiDeviceManager, SendableSample, SendableWriter};
 
 pub struct RecorderInner {
     recording: Arc<AtomicBool>,
@@ -293,6 +295,23 @@ impl RecorderInner {
             info!("D3D11 device wrapped in Arc");
             let context_mutex = Arc::new(std::sync::Mutex::new(context));
             info!("D3D11 context wrapped in mutex");
+            // --- NEW: Create and Setup DXGI Device Manager ---
+            let dxgi_device_manager: IMFDXGIDeviceManager = {
+                let mut reset_token: u32 = 0;
+                let mut manager_option: Option<IMFDXGIDeviceManager> = None;
+                
+                // Call with both required arguments
+                unsafe { MFCreateDXGIDeviceManager(&mut reset_token, &mut manager_option)? };
+                
+                // Unwrap the option to get the actual manager
+                let manager = manager_option.unwrap();
+                
+                // Reset the manager with the created device
+                manager.ResetDevice(&*device, reset_token)?;
+                
+                info!("DXGI Device Manager created and associated with D3D11 device.");
+                manager
+            };
 
             // Set up synchronization barrier
             // Always include video thread (1) plus audio if enabled
@@ -423,19 +442,27 @@ impl RecorderInner {
             let buffer_clone = replay_buffer.clone();
             let initial_pos = initial_window_position;
             let initial_size = initial_window_size;
+            let device_clone_for_processing = device.clone();
+            // --- NEW: Clone the DXGI Device Manager for the processing thread ---
+            let sendable_dxgi_manager = SendableDxgiDeviceManager(dxgi_device_manager);
+            let dxgi_manager_clone = Arc::new(sendable_dxgi_manager);
+            // --- End NEW ---
 
             // Create the texture pool for processing using the same dimensions as the capture
-            info!("Creating texture pool for video processing");
+            info!("Creating NV12 texture pool for video processing output");
             let processing_texture_pool = crate::types::TexturePool::new(
-                device.clone(),
-                3,
-                input_width,
-                input_height,
-                windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
+                device.clone(), // Use the Arc'd device
+                3,                  // Pool capacity (e.g., 3 textures)
+                output_width,       // Use OUTPUT dimensions
+                output_height,
+                DXGI_FORMAT_NV12,   // Format is NV12
+                D3D11_USAGE_DEFAULT,// Default GPU usage
+                D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET, // Needed for MFT output
+                D3D11_CPU_ACCESS_FLAG(0), // No CPU access needed
+                D3D11_RESOURCE_MISC_FLAG(0), // NO GDI compatibility for NV12!
             )?;
             let processing_texture_pool = Arc::new(processing_texture_pool);
-            info!("Created texture pool for video processing");
-            
+            info!("Created NV12 processing texture pool successfully.");
             let processing_texture_pool_clone = processing_texture_pool.clone();
             
             process_handle = Some(std::thread::spawn(move || {
@@ -451,7 +478,8 @@ impl RecorderInner {
                     input_height,  // Capture dimensions
                     output_width,  // Target dimensions
                     output_height, // Target dimensions
-                    device,
+                    device_clone_for_processing,
+                    dxgi_manager_clone,
                     capture_audio,
                     capture_microphone,
                     system_volume,

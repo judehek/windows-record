@@ -259,14 +259,20 @@ pub unsafe fn get_frames(
     use windows::Win32::Graphics::Dxgi::Common::*;
 
     // Create a pool with capacity of 1 acquisition textures - adjust based on expected frame rate and processing time
-    let texture_pool = TexturePool::new(
-        device.clone(),
-        10, // Acquisition capacity
-        input_width,
+    info!("Creating BGRA texture pool for frame acquisition");
+    let acquisition_texture_pool = TexturePool::new(
+        device.clone(), // Pass the device Arc
+        10,             // Acquisition capacity (adjust as needed)
+        input_width,    // Use INPUT dimensions
         input_height,
-        DXGI_FORMAT_B8G8R8A8_UNORM,
+        DXGI_FORMAT_B8G8R8A8_UNORM, // Format is BGRA8
+        D3D11_USAGE_DEFAULT,
+        D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET, // Needed for GDI compat
+        D3D11_CPU_ACCESS_FLAG(0),
+        D3D11_RESOURCE_MISC_GDI_COMPATIBLE, // <<< ENABLE GDI for cursor drawing
     )?;
-    let texture_pool = Arc::new(texture_pool);
+    let acquisition_texture_pool = Arc::new(acquisition_texture_pool);
+    info!("Created BGRA acquisition texture pool successfully.");
 
     // Create a pool for IMFSample objects that are bound to the textures
     let sample_pool = SamplePool::new(fps_num, 10);
@@ -360,7 +366,7 @@ pub unsafe fn get_frames(
             frame_duration,
             &mut accumulated_delay,
             &mut num_duped,
-            &texture_pool,
+            &acquisition_texture_pool,
             &sample_pool,
             capture_cursor,
         ) {
@@ -593,7 +599,7 @@ unsafe fn process_frame(
                 let mut context_guard = context_mutex.lock().unwrap();
                 match acquired_resource.cast::<ID3D11Texture2D>() {
                     Ok(source_texture) => {
-                        match texture_pool.acquire_acquisition_texture() {
+                        match texture_pool.acquire_texture() {
                             Ok(pooled_texture) => {
                                 trace!("Copying acquired frame to pooled texture.");
                                 context_guard.CopyResource(&pooled_texture, &source_texture);
@@ -687,7 +693,7 @@ unsafe fn process_frame(
     } else {
         // --- Unfocused Path: Use Blank Frame ---
         trace!("Window unfocused, using blank frame.");
-        final_texture = Some(texture_pool.get_blank_texture().map_err(|e| {
+        final_texture = Some(texture_pool.acquire_texture().map_err(|e| {
             error!("Failed to get blank texture from pool: {:?}", e);
             FrameError::TexturePoolError
         })?);

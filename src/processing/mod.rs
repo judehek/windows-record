@@ -9,8 +9,11 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use windows::core::Result;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
+use windows::Win32::Media::MediaFoundation::IMFDXGIDeviceManager;
 
-use crate::types::{ReplayBuffer, SendableSample, SendableWriter, TexturePool};
+use crate::types::{
+    ReplayBuffer, SendableDxgiDeviceManager, SendableSample, SendableWriter, TexturePool,
+};
 
 pub fn process_samples(
     writer: SendableWriter,
@@ -24,6 +27,7 @@ pub fn process_samples(
     output_width: u32,
     output_height: u32,
     device: Arc<ID3D11Device>,
+    dxgi_device_manager: Arc<SendableDxgiDeviceManager>,
     capture_audio: bool,
     capture_microphone: bool,
     system_volume: Option<f32>,
@@ -79,9 +83,15 @@ pub fn process_samples(
     };
 
     // Create a mutex to store current window position and size with the initial values
-    info!("Initializing window position mutex with: {:?}", initial_window_position);
+    info!(
+        "Initializing window position mutex with: {:?}",
+        initial_window_position
+    );
     let window_position = Arc::new(Mutex::new(initial_window_position));
-    info!("Initializing window size mutex with: {:?}", initial_window_size);
+    info!(
+        "Initializing window size mutex with: {:?}",
+        initial_window_size
+    );
     let window_size = Arc::new(Mutex::new(initial_window_size));
 
     // Flag to track window changes
@@ -152,6 +162,7 @@ pub fn process_samples(
             input_height,
             output_width,
             output_height,
+            &dxgi_device_manager,
             window_position.clone(),
             window_size.clone(),
         )
@@ -311,7 +322,7 @@ pub fn process_samples(
                     // This could be because there's no microphone device
                     info!("Microphone channel disconnected - no microphone data will be included");
                     microphone_disconnected = true;
-                    
+
                     // If we're supposed to be mixing, update the AudioMixer to not wait for mic data
                     if let Some(mixer) = &mut audio_mixer {
                         if capture_audio && capture_microphone {

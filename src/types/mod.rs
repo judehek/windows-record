@@ -462,3 +462,25 @@ impl ReplayBuffer {
         debug!("Replay buffer cleared");
     }
 }
+
+use std::ops::Deref;
+use windows::Win32::Media::MediaFoundation::IMFDXGIDeviceManager;
+
+// Wrapper to mark IMFDXGIDeviceManager as Send + Sync
+#[derive(Clone, Debug)]
+pub struct SendableDxgiDeviceManager(pub IMFDXGIDeviceManager);
+
+// SAFETY: IMFDXGIDeviceManager is designed to provide access to a D3D device
+// (which we've marked as thread-safe) across threads for Media Foundation.
+// Key methods like GetVideoService are expected to be called from MF component threads.
+// Therefore, we assert that it's safe to Send and Sync.
+unsafe impl Send for SendableDxgiDeviceManager {}
+unsafe impl Sync for SendableDxgiDeviceManager {}
+
+// Optional: Implement Deref for easier access to the inner manager's methods
+impl Deref for SendableDxgiDeviceManager {
+    type Target = IMFDXGIDeviceManager;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
