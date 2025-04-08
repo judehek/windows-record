@@ -21,6 +21,7 @@ version = "0.48"
 features = [
     "Graphics",
     "Foundation",
+    "Win32_System_WinRT",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Media_MediaFoundation",

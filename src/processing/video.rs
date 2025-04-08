@@ -436,48 +436,6 @@ fn compute_dest_rect(output_size: (i32, i32), input_size: (i32, i32)) -> RectInt
         scale_factor = output_width / input_width;
     }
 
-    /// Calculates the source rectangle based on window position and size relative to the capture input.
-    /// Returns None if the window is completely outside the capture area or size is invalid.
-    pub fn calculate_source_rect(
-        input_width: u32,
-        input_height: u32,
-        window_pos: Option<(i32, i32)>,
-        window_size: Option<(u32, u32)>,
-    ) -> Option<RECT> {
-        match (window_pos, window_size) {
-            (Some(pos), Some(size)) => {
-                // Clamp position and size to be within the input dimensions
-                let left = pos.0.max(0) as u32;
-                let top = pos.1.max(0) as u32;
-
-                // Calculate right and bottom based on clamped left/top and original size
-                let mut right = (pos.0 + size.0 as i32).max(0) as u32;
-                let mut bottom = (pos.1 + size.1 as i32).max(0) as u32;
-
-                // Clamp right and bottom to input dimensions
-                right = right.min(input_width);
-                bottom = bottom.min(input_height);
-
-                // Ensure width and height are positive after clamping
-                if right > left && bottom > top {
-                    Some(RECT {
-                        left: left as i32,
-                        top: top as i32,
-                        right: right as i32,
-                        bottom: bottom as i32,
-                    })
-                } else {
-                    warn!("Calculated source rect has zero or negative size after clamping. Pos: {:?}, Size: {:?}, Input: {}x{}", pos, size, input_width, input_height);
-                    None // Window outside capture area or invalid size
-                }
-            }
-            _ => {
-                // If no window info, process the whole input texture
-                None
-            }
-        }
-    }
-
     let scaled_width = (input_width * scale_factor).round() as i32;
     let scaled_height = (input_height * scale_factor).round() as i32;
 
@@ -490,5 +448,47 @@ fn compute_dest_rect(output_size: (i32, i32), input_size: (i32, i32)) -> RectInt
         Y: offset_y,
         Width: scaled_width,
         Height: scaled_height,
+    }
+}
+
+/// Calculates the source rectangle based on window position and size relative to the capture input.
+/// Returns None if the window is completely outside the capture area or size is invalid.
+pub fn calculate_source_rect(
+    input_width: u32,
+    input_height: u32,
+    window_pos: Option<(i32, i32)>,
+    window_size: Option<(u32, u32)>,
+) -> Option<RECT> {
+    match (window_pos, window_size) {
+        (Some(pos), Some(size)) => {
+            // Clamp position and size to be within the input dimensions
+            let left = pos.0.max(0) as u32;
+            let top = pos.1.max(0) as u32;
+
+            // Calculate right and bottom based on clamped left/top and original size
+            let mut right = (pos.0 + size.0 as i32).max(0) as u32;
+            let mut bottom = (pos.1 + size.1 as i32).max(0) as u32;
+
+            // Clamp right and bottom to input dimensions
+            right = right.min(input_width);
+            bottom = bottom.min(input_height);
+
+            // Ensure width and height are positive after clamping
+            if right > left && bottom > top {
+                Some(RECT {
+                    left: left as i32,
+                    top: top as i32,
+                    right: right as i32,
+                    bottom: bottom as i32,
+                })
+            } else {
+                warn!("Calculated source rect has zero or negative size after clamping. Pos: {:?}, Size: {:?}, Input: {}x{}", pos, size, input_width, input_height);
+                None // Window outside capture area or invalid size
+            }
+        }
+        _ => {
+            // If no window info, process the whole input texture
+            None
+        }
     }
 }
